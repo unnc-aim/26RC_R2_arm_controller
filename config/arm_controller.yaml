@@ -1,0 +1,54 @@
+arm_controller:
+  ros__parameters:
+    sbus:
+      topic: "/sbus/read"
+      mode_channel: 4
+      estop_channel: 4
+      estop_high: 1600
+      estop_low: 370
+      mode_high: 1600
+      mode_mid: 1024
+      mode_low: 360
+      debounce_ms: 100
+
+    joint1:
+      read_topic: "/joint1/read"
+      write_topic: "/joint1/write"
+
+    joint2:
+      read_topic: "/joint2/read"
+      write_topic: "/joint2/write"
+
+    joint3:
+      read_topic: "/joint3/read"
+      write_topic: "/joint3/write"
+
+    joint4:
+      read_topic: "/joint4/read"
+      write_topic: "/joint4/write"
+
+    motion:
+      control_loop_hz: 1000.0
+      speed: 0.1
+      position_tolerance: 0.01
+      prefer_joint1_positive_direction_to_show_high: true
+
+    poses:
+      manual:
+        joint1: 1.8369219303131104
+        joint2: -0.19687986373901367
+        joint3: 0.0
+        joint4: 0.0
+      show_low:
+        joint1: 1.8369219303131104
+        joint2: -0.19687986373901367
+        joint3: 0.0
+        joint4: 0.0
+      show_high:
+        joint1: -2.2454466819763184
+        joint2: 0.8751018047332764
+        joint3: 0.0
+        joint4: 0.0
+
+    diagnostics:        
+      warn_throttle_ms: 1000
