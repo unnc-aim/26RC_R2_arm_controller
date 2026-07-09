@@ -100,9 +100,9 @@ class ArmControllerNode : public rclcpp::Node
 public:
   explicit ArmControllerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
-  // PoseArm.action future adapter can call this method directly.
+  // PoseArm.action adapter can call this method directly (non-blocking).
   [[nodiscard]] PoseExecutionResult execute_pose_request(const PoseExecutionRequest & request);
-  // HandleForestKFS.action future adapter can call this method directly.
+  // HandleForestKFS.action adapter can call this method directly (non-blocking).
   [[nodiscard]] PoseExecutionResult execute_handle_kfs_request(const HandleKfsExecutionRequest & request);
   [[nodiscard]] PoseExecutionFeedback current_pose_feedback() const;
 
@@ -148,7 +148,6 @@ private:
     const std::vector<PoseSequenceStep> & sequence_steps,
     const std::string & sequence_name,
     const std::string & trigger_source);
-  [[nodiscard]] PoseExecutionResult wait_for_execution_result(double wait_timeout_sec) const;
   [[nodiscard]] static std::optional<std::string> resolve_handle_kfs_sequence_key(
     uint8_t mode,
     uint8_t target_stair_level);

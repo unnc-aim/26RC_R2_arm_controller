@@ -284,9 +284,20 @@ void ArmControllerNode::control_timer_callback()
 				latest_sbus_.channels.size());
 		}
 
+		if (!parse_output.sbus_ok) {
+			RCLCPP_WARN_THROTTLE(
+				this->get_logger(),
+				*this->get_clock(),
+				warn_throttle_ms_,
+				"SBUS is not healthy, mode event masked. online=%u fail_safe=%u frame_lost=%u",
+				latest_sbus_.online,
+				latest_sbus_.fail_safe,
+				latest_sbus_.frame_lost);
+		}
+
 		estop_asserted = parse_output.estop_asserted;
 		estop_released = parse_output.estop_released;
-		mode_event = parse_output.mode_event;
+		mode_event = parse_output.sbus_ok ? parse_output.mode_event : ModeEvent::NONE;
 	}
 
 	const auto transition = state_machine_.update(estop_asserted, estop_released, mode_event);
@@ -355,12 +366,7 @@ void ArmControllerNode::apply_transition(const StateTransition & transition)
 
 PoseExecutionResult ArmControllerNode::execute_pose_request(const PoseExecutionRequest & request)
 {
-	const auto start_result = execute_pose_by_id(request.pose_id, "EXTERNAL_REQUEST");
-	if (!start_result.success) {
-		return start_result;
-	}
-
-	return wait_for_execution_result(pose_timeout_sec_ + 1.0);
+	return execute_pose_by_id(request.pose_id, "EXTERNAL_REQUEST");
 }
 
 PoseExecutionResult ArmControllerNode::execute_handle_kfs_request(const HandleKfsExecutionRequest & request)
@@ -385,12 +391,7 @@ PoseExecutionResult ArmControllerNode::execute_handle_kfs_request(const HandleKf
 		return result;
 	}
 
-	const auto start_result = execute_sequence(sequence_it->second, sequence_key.value(), "HANDLE_FOREST_KFS");
-	if (!start_result.success) {
-		return start_result;
-	}
-
-	return wait_for_execution_result(sequence_total_timeout_sec_ + 1.0);
+	return execute_sequence(sequence_it->second, sequence_key.value(), "HANDLE_FOREST_KFS");
 }
 
 PoseExecutionFeedback ArmControllerNode::current_pose_feedback() const
@@ -801,31 +802,6 @@ PoseExecutionResult ArmControllerNode::execute_sequence(
 		"Accepted sequence " + sequence_name + " from " + trigger_source + ". steps=" +
 		std::to_string(sequence_steps.size());
 	RCLCPP_INFO(this->get_logger(), "%s", result.message.c_str());
-	return result;
-}
-
-PoseExecutionResult ArmControllerNode::wait_for_execution_result(double wait_timeout_sec) const
-{
-	PoseExecutionResult result;
-	const auto wait_started_at = this->now();
-	rclcpp::WallRate wait_rate(200.0);
-
-	while (rclcpp::ok()) {
-		if (!pose_execution_state_.active) {
-			return last_pose_result_;
-		}
-
-		if ((this->now() - wait_started_at).seconds() > wait_timeout_sec) {
-			result.success = false;
-			result.message = "Execution wait timeout.";
-			return result;
-		}
-
-		wait_rate.sleep();
-	}
-
-	result.success = false;
-	result.message = "Execution interrupted by shutdown.";
 	return result;
 }
 
