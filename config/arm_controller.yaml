@@ -49,7 +49,76 @@ arm_controller:
         min: -3.0
         max: 3.0
 
+    handle_kfs:
+      pick_down:
+        step_count: 3
+        steps:
+          0:
+            pose: pose_init
+            dwell_sec: 0.0
+          1:
+            pose: pose_read_kfs_below
+            dwell_sec: 0.5
+          2:
+            pose: pose_init
+            dwell_sec: 0.0
+
+      pick_up:
+        step_count: 3
+        steps:
+          0:
+            pose: pose_init
+            dwell_sec: 0.0
+          1:
+            pose: pose_read_kfs_above
+            dwell_sec: 0.5
+          2:
+            pose: pose_init
+            dwell_sec: 0.0
+
+      place_down:
+        step_count: 3
+        steps:
+          0:
+            pose: pose_init
+            dwell_sec: 0.0
+          1:
+            pose: pose_read_kfs_below
+            dwell_sec: 0.5
+          2:
+            pose: pose_init
+            dwell_sec: 0.0
+
+      place_up:
+        step_count: 3
+        steps:
+          0:
+            pose: pose_init
+            dwell_sec: 0.0
+          1:
+            pose: pose_read_kfs_above
+            dwell_sec: 0.5
+          2:
+            pose: pose_init
+            dwell_sec: 0.0
+
+    diagnostics:        
+      warn_throttle_ms: 1000
+
     poses:
+      names:
+        - manual
+        - show_low
+        - show_high
+        - pose_init
+        - pose_read_kfs_below
+        - pose_read_kfs_above
+        - pose_read_aruco_forward
+        - pose_climb_r1
+        - pose_weight_forward
+        - pose_level2
+        - pose_level3
+
       manual:
         joint1: 1.8369219303131104
         joint2: -0.19687986373901367
@@ -106,95 +175,3 @@ arm_controller:
         joint2: 0.8751018047332764
         joint3: 0.0
         joint4: 0.0
-
-    handle_kfs:
-      pick_down:
-        step_count: 3
-        steps:
-          0:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.0
-          1:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.5
-          2:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.0
-
-      pick_up:
-        step_count: 3
-        steps:
-          0:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.0
-          1:
-            joint1: -2.2454466819763184
-            joint2: 0.8751018047332764
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.5
-          2:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.0
-
-      place_down:
-        step_count: 3
-        steps:
-          0:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.0
-          1:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.5
-          2:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.0
-
-      place_up:
-        step_count: 3
-        steps:
-          0:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.0
-          1:
-            joint1: -2.2454466819763184
-            joint2: 0.8751018047332764
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.5
-          2:
-            joint1: 1.8369219303131104
-            joint2: -0.19687986373901367
-            joint3: 0.0
-            joint4: 0.0
-            dwell_sec: 0.0
-
-    diagnostics:        
-      warn_throttle_ms: 1000

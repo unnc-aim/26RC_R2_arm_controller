@@ -6,6 +6,7 @@
 #include <functional>
 #include <limits>
 #include <stdexcept>
+#include <unordered_set>
 
 using namespace std::chrono_literals;
 
@@ -94,58 +95,110 @@ void ArmControllerNode::load_parameters()
 	joint_limits_[3].min_position = this->declare_parameter<double>("joint_limits.joint4.min", -3.0);
 	joint_limits_[3].max_position = this->declare_parameter<double>("joint_limits.joint4.max", 3.0);
 
+	named_poses_.clear();
 	manual_pose_.joint1 = this->declare_parameter<double>("poses.manual.joint1", 1000.0);
 	manual_pose_.joint2 = this->declare_parameter<double>("poses.manual.joint2", 2000.0);
 	manual_pose_.joint3 = this->declare_parameter<double>("poses.manual.joint3", 3000.0);
 	manual_pose_.joint4 = this->declare_parameter<double>("poses.manual.joint4", 4000.0);
+	named_poses_["manual"] = manual_pose_;
+
 	show_low_pose_.joint1 = this->declare_parameter<double>("poses.show_low.joint1", 3000.0);
 	show_low_pose_.joint2 = this->declare_parameter<double>("poses.show_low.joint2", 4000.0);
 	show_low_pose_.joint3 = this->declare_parameter<double>("poses.show_low.joint3", 5000.0);
 	show_low_pose_.joint4 = this->declare_parameter<double>("poses.show_low.joint4", 6000.0);
+	named_poses_["show_low"] = show_low_pose_;
+
 	show_high_pose_.joint1 = this->declare_parameter<double>("poses.show_high.joint1", 5000.0);
 	show_high_pose_.joint2 = this->declare_parameter<double>("poses.show_high.joint2", 6000.0);
 	show_high_pose_.joint3 = this->declare_parameter<double>("poses.show_high.joint3", 7000.0);
 	show_high_pose_.joint4 = this->declare_parameter<double>("poses.show_high.joint4", 8000.0);
+	named_poses_["show_high"] = show_high_pose_;
 
 	pose_init_.joint1 = this->declare_parameter<double>("poses.pose_init.joint1", manual_pose_.joint1);
 	pose_init_.joint2 = this->declare_parameter<double>("poses.pose_init.joint2", manual_pose_.joint2);
 	pose_init_.joint3 = this->declare_parameter<double>("poses.pose_init.joint3", manual_pose_.joint3);
 	pose_init_.joint4 = this->declare_parameter<double>("poses.pose_init.joint4", manual_pose_.joint4);
+	named_poses_["pose_init"] = pose_init_;
 
 	pose_read_kfs_below_.joint1 = this->declare_parameter<double>("poses.pose_read_kfs_below.joint1", show_low_pose_.joint1);
 	pose_read_kfs_below_.joint2 = this->declare_parameter<double>("poses.pose_read_kfs_below.joint2", show_low_pose_.joint2);
 	pose_read_kfs_below_.joint3 = this->declare_parameter<double>("poses.pose_read_kfs_below.joint3", show_low_pose_.joint3);
 	pose_read_kfs_below_.joint4 = this->declare_parameter<double>("poses.pose_read_kfs_below.joint4", show_low_pose_.joint4);
+	named_poses_["pose_read_kfs_below"] = pose_read_kfs_below_;
 
 	pose_read_kfs_above_.joint1 = this->declare_parameter<double>("poses.pose_read_kfs_above.joint1", show_high_pose_.joint1);
 	pose_read_kfs_above_.joint2 = this->declare_parameter<double>("poses.pose_read_kfs_above.joint2", show_high_pose_.joint2);
 	pose_read_kfs_above_.joint3 = this->declare_parameter<double>("poses.pose_read_kfs_above.joint3", show_high_pose_.joint3);
 	pose_read_kfs_above_.joint4 = this->declare_parameter<double>("poses.pose_read_kfs_above.joint4", show_high_pose_.joint4);
+	named_poses_["pose_read_kfs_above"] = pose_read_kfs_above_;
 
 	pose_read_aruco_forward_.joint1 = this->declare_parameter<double>("poses.pose_read_aruco_forward.joint1", pose_read_kfs_below_.joint1);
 	pose_read_aruco_forward_.joint2 = this->declare_parameter<double>("poses.pose_read_aruco_forward.joint2", pose_read_kfs_below_.joint2);
 	pose_read_aruco_forward_.joint3 = this->declare_parameter<double>("poses.pose_read_aruco_forward.joint3", pose_read_kfs_below_.joint3);
 	pose_read_aruco_forward_.joint4 = this->declare_parameter<double>("poses.pose_read_aruco_forward.joint4", pose_read_kfs_below_.joint4);
+	named_poses_["pose_read_aruco_forward"] = pose_read_aruco_forward_;
 
 	pose_climb_r1_.joint1 = this->declare_parameter<double>("poses.pose_climb_r1.joint1", pose_read_kfs_above_.joint1);
 	pose_climb_r1_.joint2 = this->declare_parameter<double>("poses.pose_climb_r1.joint2", pose_read_kfs_above_.joint2);
 	pose_climb_r1_.joint3 = this->declare_parameter<double>("poses.pose_climb_r1.joint3", pose_read_kfs_above_.joint3);
 	pose_climb_r1_.joint4 = this->declare_parameter<double>("poses.pose_climb_r1.joint4", pose_read_kfs_above_.joint4);
+	named_poses_["pose_climb_r1"] = pose_climb_r1_;
 
 	pose_weight_forward_.joint1 = this->declare_parameter<double>("poses.pose_weight_forward.joint1", pose_init_.joint1);
 	pose_weight_forward_.joint2 = this->declare_parameter<double>("poses.pose_weight_forward.joint2", pose_init_.joint2);
 	pose_weight_forward_.joint3 = this->declare_parameter<double>("poses.pose_weight_forward.joint3", pose_init_.joint3);
 	pose_weight_forward_.joint4 = this->declare_parameter<double>("poses.pose_weight_forward.joint4", pose_init_.joint4);
+	named_poses_["pose_weight_forward"] = pose_weight_forward_;
 
 	pose_level2_.joint1 = this->declare_parameter<double>("poses.pose_level2.joint1", pose_read_kfs_above_.joint1);
 	pose_level2_.joint2 = this->declare_parameter<double>("poses.pose_level2.joint2", pose_read_kfs_above_.joint2);
 	pose_level2_.joint3 = this->declare_parameter<double>("poses.pose_level2.joint3", pose_read_kfs_above_.joint3);
 	pose_level2_.joint4 = this->declare_parameter<double>("poses.pose_level2.joint4", pose_read_kfs_above_.joint4);
+	named_poses_["pose_level2"] = pose_level2_;
 
 	pose_level3_.joint1 = this->declare_parameter<double>("poses.pose_level3.joint1", pose_read_kfs_above_.joint1);
 	pose_level3_.joint2 = this->declare_parameter<double>("poses.pose_level3.joint2", pose_read_kfs_above_.joint2);
 	pose_level3_.joint3 = this->declare_parameter<double>("poses.pose_level3.joint3", pose_read_kfs_above_.joint3);
 	pose_level3_.joint4 = this->declare_parameter<double>("poses.pose_level3.joint4", pose_read_kfs_above_.joint4);
+	named_poses_["pose_level3"] = pose_level3_;
+
+	const std::vector<std::string> required_pose_names{
+		"manual",
+		"show_low",
+		"show_high",
+		"pose_init",
+		"pose_read_kfs_below",
+		"pose_read_kfs_above",
+		"pose_read_aruco_forward",
+		"pose_climb_r1",
+		"pose_weight_forward",
+		"pose_level2",
+		"pose_level3"};
+
+	auto pose_names = this->declare_parameter<std::vector<std::string>>("poses.names", required_pose_names);
+	std::unordered_set<std::string> pose_name_set(pose_names.begin(), pose_names.end());
+	for (const auto & required_pose_name : required_pose_names) {
+		if (pose_name_set.find(required_pose_name) != pose_name_set.end()) {
+			continue;
+		}
+
+		pose_names.push_back(required_pose_name);
+		pose_name_set.insert(required_pose_name);
+	}
+
+	for (const auto & pose_name : pose_names) {
+		if (named_poses_.find(pose_name) != named_poses_.end()) {
+			continue;
+		}
+
+		PoseTarget default_pose = pose_init_;
+		PoseTarget loaded_pose;
+		loaded_pose.joint1 = this->declare_parameter<double>("poses." + pose_name + ".joint1", default_pose.joint1);
+		loaded_pose.joint2 = this->declare_parameter<double>("poses." + pose_name + ".joint2", default_pose.joint2);
+		loaded_pose.joint3 = this->declare_parameter<double>("poses." + pose_name + ".joint3", default_pose.joint3);
+		loaded_pose.joint4 = this->declare_parameter<double>("poses." + pose_name + ".joint4", default_pose.joint4);
+		named_poses_[pose_name] = loaded_pose;
+	}
 
 	initialize_pose_targets();
 	initialize_handle_kfs_sequences();
@@ -872,6 +925,22 @@ bool ArmControllerNode::load_sequence_steps_from_parameters(
 		step.dwell_sec = 0.0;
 
 		const std::string step_prefix = base_param + ".steps." + std::to_string(i);
+		const std::string pose_name = this->declare_parameter<std::string>(step_prefix + ".pose", "");
+		if (!pose_name.empty()) {
+			PoseTarget referenced_pose;
+			if (!lookup_named_pose(pose_name, &referenced_pose)) {
+				RCLCPP_ERROR(
+					this->get_logger(),
+					"Unknown pose key '%s' for %s at step %d. Add it under poses.<name> and list it in poses.names.",
+					pose_name.c_str(),
+					base_param.c_str(),
+					i);
+				return false;
+			}
+
+			step.target = referenced_pose;
+		}
+
 		step.target.joint1 = this->declare_parameter<double>(step_prefix + ".joint1", step.target.joint1);
 		step.target.joint2 = this->declare_parameter<double>(step_prefix + ".joint2", step.target.joint2);
 		step.target.joint3 = this->declare_parameter<double>(step_prefix + ".joint3", step.target.joint3);
@@ -896,6 +965,21 @@ bool ArmControllerNode::load_sequence_steps_from_parameters(
 		"Loaded sequence %s with %zu steps.",
 		base_param.c_str(),
 		sequence_steps->size());
+	return true;
+}
+
+bool ArmControllerNode::lookup_named_pose(const std::string & pose_name, PoseTarget * pose_target) const
+{
+	if (pose_target == nullptr) {
+		return false;
+	}
+
+	const auto it = named_poses_.find(pose_name);
+	if (it == named_poses_.end()) {
+		return false;
+	}
+
+	*pose_target = it->second;
 	return true;
 }
 

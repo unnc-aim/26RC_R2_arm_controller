@@ -136,6 +136,9 @@ private:
     const std::string & base_param,
     const std::vector<PoseActionId> & fallback_pose_ids,
     std::vector<PoseSequenceStep> * sequence_steps);
+  [[nodiscard]] bool lookup_named_pose(
+    const std::string & pose_name,
+    PoseTarget * pose_target) const;
   [[nodiscard]] static std::optional<float> find_safe_target_position(
     float current_position,
     float requested_target,
@@ -187,6 +190,7 @@ private:
   PoseTarget pose_weight_forward_{};
   PoseTarget pose_level2_{};
   PoseTarget pose_level3_{};
+  std::unordered_map<std::string, PoseTarget> named_poses_{};
   std::array<PoseTarget, kPoseCount> pose_targets_{};
   std::unordered_map<std::string, std::vector<PoseSequenceStep>> handle_kfs_sequences_{};
   std::array<JointLimit, 4> joint_limits_{};
