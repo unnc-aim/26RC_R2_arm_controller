@@ -4,8 +4,11 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstddef>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "custom_msgs/msg/read_dm_motor.hpp"
 #include "custom_msgs/msg/read_sbusrc.hpp"
@@ -48,6 +51,25 @@ struct PoseExecutionRequest
   uint8_t pose_id{0U};
 };
 
+struct HandleKfsExecutionRequest
+{
+  uint8_t mode{0U};
+  uint8_t target_stair_level{0U};
+};
+
+struct PoseSequenceStep
+{
+  PoseTarget target{};
+  double dwell_sec{0.0};
+};
+
+enum class ExecutionKind : uint8_t
+{
+  NONE = 0,
+  POSE = 1,
+  SEQUENCE = 2,
+};
+
 struct PoseExecutionFeedback
 {
   uint8_t stage{0U};
@@ -63,8 +85,13 @@ struct PoseExecutionResult
 struct PoseExecutionState
 {
   bool active{false};
+  ExecutionKind kind{ExecutionKind::NONE};
   std::optional<PoseActionId> active_pose{};
+  std::optional<std::string> active_sequence_name{};
+  size_t active_step_index{0U};
   std::optional<rclcpp::Time> started_at{};
+  std::optional<rclcpp::Time> step_started_at{};
+  std::optional<rclcpp::Time> dwell_started_at{};
   PoseExecutionFeedback feedback{};
 };
 
@@ -75,6 +102,8 @@ public:
 
   // PoseArm.action future adapter can call this method directly.
   [[nodiscard]] PoseExecutionResult execute_pose_request(const PoseExecutionRequest & request);
+  // HandleForestKFS.action future adapter can call this method directly.
+  [[nodiscard]] PoseExecutionResult execute_handle_kfs_request(const HandleKfsExecutionRequest & request);
   [[nodiscard]] PoseExecutionFeedback current_pose_feedback() const;
 
 private:
@@ -91,13 +120,22 @@ private:
   void control_timer_callback();
 
   void initialize_pose_targets();
+  void initialize_handle_kfs_sequences();
   void update_pose_execution_status();
+  void update_single_pose_execution_status();
+  void update_sequence_execution_status();
   void mark_pose_execution_failed(const std::string & message);
   [[nodiscard]] bool is_pose_execution_timeout() const;
+  [[nodiscard]] bool is_sequence_step_timeout() const;
+  [[nodiscard]] bool is_sequence_total_timeout() const;
   [[nodiscard]] bool resolve_pose_target_safe(
     const PoseTarget & requested_target,
     PoseTarget * resolved_target,
     std::string * error_message) const;
+  [[nodiscard]] bool load_sequence_steps_from_parameters(
+    const std::string & base_param,
+    const std::vector<PoseActionId> & fallback_pose_ids,
+    std::vector<PoseSequenceStep> * sequence_steps);
   [[nodiscard]] static std::optional<float> find_safe_target_position(
     float current_position,
     float requested_target,
@@ -106,6 +144,14 @@ private:
   void apply_transition(const StateTransition & transition);
   void send_pose_target(const PoseTarget & target, const std::string & pose_name);
   [[nodiscard]] PoseExecutionResult execute_pose_by_id(uint8_t pose_id, const std::string & trigger_source);
+  [[nodiscard]] PoseExecutionResult execute_sequence(
+    const std::vector<PoseSequenceStep> & sequence_steps,
+    const std::string & sequence_name,
+    const std::string & trigger_source);
+  [[nodiscard]] PoseExecutionResult wait_for_execution_result(double wait_timeout_sec) const;
+  [[nodiscard]] static std::optional<std::string> resolve_handle_kfs_sequence_key(
+    uint8_t mode,
+    uint8_t target_stair_level);
   [[nodiscard]] static std::optional<PoseActionId> to_pose_action_id(uint8_t pose_id);
   [[nodiscard]] const PoseTarget * pose_target_of(PoseActionId pose_id) const;
   [[nodiscard]] static const char * pose_to_string(PoseActionId pose_id);
@@ -126,6 +172,8 @@ private:
   float motion_speed_{5.0F};
   float position_tolerance_{5.0F};
   double pose_timeout_sec_{8.0};
+  double sequence_step_timeout_sec_{8.0};
+  double sequence_total_timeout_sec_{60.0};
   int warn_throttle_ms_{1000};
 
   PoseTarget manual_pose_{};
@@ -141,6 +189,7 @@ private:
   PoseTarget pose_level2_{};
   PoseTarget pose_level3_{};
   std::array<PoseTarget, kPoseCount> pose_targets_{};
+  std::unordered_map<std::string, std::vector<PoseSequenceStep>> handle_kfs_sequences_{};
   std::array<JointLimit, 4> joint_limits_{};
 
   PoseExecutionState pose_execution_state_{};

@@ -32,6 +32,8 @@ arm_controller:
       speed: 0.1
       position_tolerance: 0.01
       pose_timeout_sec: 8.0
+      sequence_step_timeout_sec: 8.0
+      sequence_total_timeout_sec: 60.0
 
     joint_limits:
       joint1:
@@ -104,6 +106,95 @@ arm_controller:
         joint2: 0.8751018047332764
         joint3: 0.0
         joint4: 0.0
+
+    handle_kfs:
+      pick_down:
+        step_count: 3
+        steps:
+          0:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.0
+          1:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.5
+          2:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.0
+
+      pick_up:
+        step_count: 3
+        steps:
+          0:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.0
+          1:
+            joint1: -2.2454466819763184
+            joint2: 0.8751018047332764
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.5
+          2:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.0
+
+      place_down:
+        step_count: 3
+        steps:
+          0:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.0
+          1:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.5
+          2:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.0
+
+      place_up:
+        step_count: 3
+        steps:
+          0:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.0
+          1:
+            joint1: -2.2454466819763184
+            joint2: 0.8751018047332764
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.5
+          2:
+            joint1: 1.8369219303131104
+            joint2: -0.19687986373901367
+            joint3: 0.0
+            joint4: 0.0
+            dwell_sec: 0.0
 
     diagnostics:        
       warn_throttle_ms: 1000

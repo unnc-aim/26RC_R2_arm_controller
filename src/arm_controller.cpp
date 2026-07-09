@@ -16,9 +16,28 @@ namespace
 {
 
 constexpr uint8_t kStageInit = 0U;
-constexpr uint8_t kStageReaching = 2U;
-constexpr uint8_t kStageReached = 4U;
+constexpr uint8_t kStageTurningOnSuction = 1U;
+constexpr uint8_t kStageReachingOut = 2U;
+constexpr uint8_t kStageTurningOffSuction = 3U;
+constexpr uint8_t kStageReachingBack = 4U;
+constexpr uint8_t kHandleKfsModePick = 0U;
+constexpr uint8_t kHandleKfsModePlace = 1U;
+constexpr uint8_t kHandleKfsLevelDown = 0U;
+constexpr uint8_t kHandleKfsLevelUp = 1U;
 constexpr float kTwoPi = 6.28318530717958647692F;
+
+uint8_t stage_for_sequence_dwell(const std::string & sequence_name)
+{
+	if (sequence_name.rfind("pick_", 0U) == 0U) {
+		return kStageTurningOnSuction;
+	}
+
+	if (sequence_name.rfind("place_", 0U) == 0U) {
+		return kStageTurningOffSuction;
+	}
+
+	return kStageInit;
+}
 
 }  // namespace
 
@@ -62,6 +81,8 @@ void ArmControllerNode::load_parameters()
 	motion_speed_ = this->declare_parameter<double>("motion.speed", 5.0);
 	position_tolerance_ = this->declare_parameter<double>("motion.position_tolerance", 5.0);
 	pose_timeout_sec_ = this->declare_parameter<double>("motion.pose_timeout_sec", 8.0);
+	sequence_step_timeout_sec_ = this->declare_parameter<double>("motion.sequence_step_timeout_sec", pose_timeout_sec_);
+	sequence_total_timeout_sec_ = this->declare_parameter<double>("motion.sequence_total_timeout_sec", 60.0);
 	warn_throttle_ms_ = this->declare_parameter<int>("diagnostics.warn_throttle_ms", 1000);
 
 	joint_limits_[0].min_position = this->declare_parameter<double>("joint_limits.joint1.min", -3.0);
@@ -127,6 +148,7 @@ void ArmControllerNode::load_parameters()
 	pose_level3_.joint4 = this->declare_parameter<double>("poses.pose_level3.joint4", pose_read_kfs_above_.joint4);
 
 	initialize_pose_targets();
+	initialize_handle_kfs_sequences();
 
 	if (loop_hz_ <= 0.0) {
 		RCLCPP_ERROR(
@@ -142,6 +164,22 @@ void ArmControllerNode::load_parameters()
 			"Invalid parameter motion.pose_timeout_sec=%.3f, must be > 0.",
 			pose_timeout_sec_);
 		throw std::invalid_argument("motion.pose_timeout_sec must be > 0");
+	}
+
+	if (sequence_step_timeout_sec_ <= 0.0) {
+		RCLCPP_ERROR(
+			this->get_logger(),
+			"Invalid parameter motion.sequence_step_timeout_sec=%.3f, must be > 0.",
+			sequence_step_timeout_sec_);
+		throw std::invalid_argument("motion.sequence_step_timeout_sec must be > 0");
+	}
+
+	if (sequence_total_timeout_sec_ <= 0.0) {
+		RCLCPP_ERROR(
+			this->get_logger(),
+			"Invalid parameter motion.sequence_total_timeout_sec=%.3f, must be > 0.",
+			sequence_total_timeout_sec_);
+		throw std::invalid_argument("motion.sequence_total_timeout_sec must be > 0");
 	}
 
 	for (size_t i = 0; i < joint_limits_.size(); ++i) {
@@ -317,7 +355,42 @@ void ArmControllerNode::apply_transition(const StateTransition & transition)
 
 PoseExecutionResult ArmControllerNode::execute_pose_request(const PoseExecutionRequest & request)
 {
-	return execute_pose_by_id(request.pose_id, "EXTERNAL_REQUEST");
+	const auto start_result = execute_pose_by_id(request.pose_id, "EXTERNAL_REQUEST");
+	if (!start_result.success) {
+		return start_result;
+	}
+
+	return wait_for_execution_result(pose_timeout_sec_ + 1.0);
+}
+
+PoseExecutionResult ArmControllerNode::execute_handle_kfs_request(const HandleKfsExecutionRequest & request)
+{
+	const auto sequence_key = resolve_handle_kfs_sequence_key(request.mode, request.target_stair_level);
+	if (!sequence_key.has_value()) {
+		PoseExecutionResult result;
+		result.success = false;
+		result.message =
+			"Invalid HandleForestKFS mode/target_stair_level: mode=" + std::to_string(request.mode) +
+			" target_stair_level=" + std::to_string(request.target_stair_level);
+		RCLCPP_WARN(this->get_logger(), "%s", result.message.c_str());
+		return result;
+	}
+
+	const auto sequence_it = handle_kfs_sequences_.find(sequence_key.value());
+	if (sequence_it == handle_kfs_sequences_.end()) {
+		PoseExecutionResult result;
+		result.success = false;
+		result.message = "HandleForestKFS sequence not configured: " + sequence_key.value();
+		RCLCPP_WARN(this->get_logger(), "%s", result.message.c_str());
+		return result;
+	}
+
+	const auto start_result = execute_sequence(sequence_it->second, sequence_key.value(), "HANDLE_FOREST_KFS");
+	if (!start_result.success) {
+		return start_result;
+	}
+
+	return wait_for_execution_result(sequence_total_timeout_sec_ + 1.0);
 }
 
 PoseExecutionFeedback ArmControllerNode::current_pose_feedback() const
@@ -337,7 +410,54 @@ void ArmControllerNode::initialize_pose_targets()
 	pose_targets_[static_cast<size_t>(PoseActionId::POSE_LEVEL3)] = pose_level3_;
 }
 
+void ArmControllerNode::initialize_handle_kfs_sequences()
+{
+	handle_kfs_sequences_.clear();
+
+	std::vector<PoseSequenceStep> pick_down_steps;
+	if (load_sequence_steps_from_parameters(
+			"handle_kfs.pick_down",
+			{PoseActionId::POSE_INIT, PoseActionId::POSE_READ_KFS_BELOW, PoseActionId::POSE_INIT},
+			&pick_down_steps)) {
+		handle_kfs_sequences_["pick_down"] = pick_down_steps;
+	}
+
+	std::vector<PoseSequenceStep> pick_up_steps;
+	if (load_sequence_steps_from_parameters(
+			"handle_kfs.pick_up",
+			{PoseActionId::POSE_INIT, PoseActionId::POSE_READ_KFS_ABOVE, PoseActionId::POSE_INIT},
+			&pick_up_steps)) {
+		handle_kfs_sequences_["pick_up"] = pick_up_steps;
+	}
+
+	std::vector<PoseSequenceStep> place_down_steps;
+	if (load_sequence_steps_from_parameters(
+			"handle_kfs.place_down",
+			{PoseActionId::POSE_INIT, PoseActionId::POSE_READ_KFS_BELOW, PoseActionId::POSE_INIT},
+			&place_down_steps)) {
+		handle_kfs_sequences_["place_down"] = place_down_steps;
+	}
+
+	std::vector<PoseSequenceStep> place_up_steps;
+	if (load_sequence_steps_from_parameters(
+			"handle_kfs.place_up",
+			{PoseActionId::POSE_INIT, PoseActionId::POSE_READ_KFS_ABOVE, PoseActionId::POSE_INIT},
+			&place_up_steps)) {
+		handle_kfs_sequences_["place_up"] = place_up_steps;
+	}
+}
+
 void ArmControllerNode::update_pose_execution_status()
+{
+	if (pose_execution_state_.kind == ExecutionKind::SEQUENCE) {
+		update_sequence_execution_status();
+		return;
+	}
+
+	update_single_pose_execution_status();
+}
+
+void ArmControllerNode::update_single_pose_execution_status()
 {
 	if (!pose_execution_state_.active) {
 		return;
@@ -350,7 +470,7 @@ void ArmControllerNode::update_pose_execution_status()
 
 	if (motor_controller_.motion_completed()) {
 		pose_execution_state_.active = false;
-		pose_execution_state_.feedback.stage = kStageReached;
+		pose_execution_state_.feedback.stage = kStageReachingBack;
 		pose_execution_state_.feedback.progress = 1.0F;
 		last_pose_result_.success = true;
 		last_pose_result_.message = "Pose execution completed.";
@@ -358,7 +478,7 @@ void ArmControllerNode::update_pose_execution_status()
 		return;
 	}
 
-	pose_execution_state_.feedback.stage = kStageReaching;
+	pose_execution_state_.feedback.stage = kStageReachingOut;
 	pose_execution_state_.feedback.progress = 0.2F;
 
 	if (!motor_controller_.feedback_ready() || !motor_controller_.has_active_target()) {
@@ -377,13 +497,131 @@ void ArmControllerNode::update_pose_execution_status()
 	pose_execution_state_.feedback.progress = std::max(0.2F, 1.0F - normalized_remaining);
 }
 
+void ArmControllerNode::update_sequence_execution_status()
+{
+	if (!pose_execution_state_.active) {
+		return;
+	}
+
+	if (is_sequence_total_timeout()) {
+		mark_pose_execution_failed("Sequence execution timeout.");
+		return;
+	}
+
+	if (is_sequence_step_timeout()) {
+		mark_pose_execution_failed(
+			"Sequence step timeout at step index " + std::to_string(pose_execution_state_.active_step_index) + ".");
+		return;
+	}
+
+	if (!pose_execution_state_.active_sequence_name.has_value()) {
+		mark_pose_execution_failed("Internal error: active sequence name is missing.");
+		return;
+	}
+
+	const auto sequence_it = handle_kfs_sequences_.find(pose_execution_state_.active_sequence_name.value());
+	if (sequence_it == handle_kfs_sequences_.end()) {
+		mark_pose_execution_failed(
+			"Sequence removed during execution: " + pose_execution_state_.active_sequence_name.value());
+		return;
+	}
+
+	const auto & sequence_steps = sequence_it->second;
+	if (pose_execution_state_.active_step_index >= sequence_steps.size()) {
+		pose_execution_state_.active = false;
+		pose_execution_state_.kind = ExecutionKind::NONE;
+		pose_execution_state_.active_pose.reset();
+		pose_execution_state_.active_sequence_name.reset();
+		pose_execution_state_.started_at.reset();
+		pose_execution_state_.step_started_at.reset();
+		pose_execution_state_.dwell_started_at.reset();
+		pose_execution_state_.feedback.stage = kStageReachingBack;
+		pose_execution_state_.feedback.progress = 1.0F;
+		motor_controller_.clear_active_target();
+		last_pose_result_.success = true;
+		last_pose_result_.message = "Sequence execution completed.";
+		RCLCPP_INFO(this->get_logger(), "%s", last_pose_result_.message.c_str());
+		return;
+	}
+
+	if (!motor_controller_.motion_completed()) {
+		if (pose_execution_state_.active_step_index + 1U < sequence_steps.size()) {
+			pose_execution_state_.feedback.stage = kStageReachingOut;
+		} else {
+			pose_execution_state_.feedback.stage = kStageReachingBack;
+		}
+		pose_execution_state_.feedback.progress = 0.2F;
+
+		if (!motor_controller_.feedback_ready() || !motor_controller_.has_active_target()) {
+			return;
+		}
+
+		const auto & target = motor_controller_.active_target().value();
+		const float joint1_error = std::fabs(target.joint1 - motor_controller_.joint1_feedback().value().position);
+		const float joint2_error = std::fabs(target.joint2 - motor_controller_.joint2_feedback().value().position);
+		const float joint3_error = std::fabs(target.joint3 - motor_controller_.joint3_feedback().value().position);
+		const float joint4_error = std::fabs(target.joint4 - motor_controller_.joint4_feedback().value().position);
+		const float max_error = std::max(std::max(joint1_error, joint2_error), std::max(joint3_error, joint4_error));
+
+		const float safe_scale = std::max(position_tolerance_ * 10.0F, 0.001F);
+		const float normalized_remaining = std::clamp(max_error / safe_scale, 0.0F, 1.0F);
+		pose_execution_state_.feedback.progress = std::max(0.2F, 1.0F - normalized_remaining);
+		return;
+	}
+
+	const auto & current_step = sequence_steps[pose_execution_state_.active_step_index];
+
+	if (current_step.dwell_sec > 0.0) {
+		if (!pose_execution_state_.dwell_started_at.has_value()) {
+			pose_execution_state_.dwell_started_at = this->now();
+		}
+
+		const double dwell_elapsed =
+			(this->now() - pose_execution_state_.dwell_started_at.value()).seconds();
+		if (dwell_elapsed < current_step.dwell_sec) {
+			pose_execution_state_.feedback.stage =
+				stage_for_sequence_dwell(pose_execution_state_.active_sequence_name.value());
+			pose_execution_state_.feedback.progress = 1.0F;
+			return;
+		}
+	}
+
+	const size_t next_step_index = pose_execution_state_.active_step_index + 1U;
+	if (next_step_index >= sequence_steps.size()) {
+		pose_execution_state_.active_step_index = next_step_index;
+		return;
+	}
+
+	PoseTarget command_target;
+	std::string resolve_error;
+	if (!resolve_pose_target_safe(sequence_steps[next_step_index].target, &command_target, &resolve_error)) {
+		mark_pose_execution_failed(resolve_error);
+		return;
+	}
+
+	send_pose_target(
+		command_target,
+		pose_execution_state_.active_sequence_name.value() + "_step_" + std::to_string(next_step_index));
+
+	pose_execution_state_.active_step_index = next_step_index;
+	pose_execution_state_.step_started_at = this->now();
+	pose_execution_state_.dwell_started_at.reset();
+	pose_execution_state_.feedback.stage = kStageInit;
+	pose_execution_state_.feedback.progress = 0.0F;
+}
+
 void ArmControllerNode::mark_pose_execution_failed(const std::string & message)
 {
 	pose_execution_state_.active = false;
-	pose_execution_state_.feedback.stage = kStageReached;
+	pose_execution_state_.kind = ExecutionKind::NONE;
+	pose_execution_state_.feedback.stage = kStageReachingBack;
 	pose_execution_state_.feedback.progress = 1.0F;
 	pose_execution_state_.active_pose.reset();
+	pose_execution_state_.active_sequence_name.reset();
+	pose_execution_state_.active_step_index = 0U;
 	pose_execution_state_.started_at.reset();
+	pose_execution_state_.step_started_at.reset();
+	pose_execution_state_.dwell_started_at.reset();
 	motor_controller_.clear_active_target();
 	last_pose_result_.success = false;
 	last_pose_result_.message = message;
@@ -397,6 +635,36 @@ bool ArmControllerNode::is_pose_execution_timeout() const
 	}
 
 	return (this->now() - pose_execution_state_.started_at.value()).seconds() > pose_timeout_sec_;
+}
+
+bool ArmControllerNode::is_sequence_step_timeout() const
+{
+	if (!pose_execution_state_.active || (pose_execution_state_.kind != ExecutionKind::SEQUENCE)) {
+		return false;
+	}
+
+	if (motor_controller_.motion_completed()) {
+		return false;
+	}
+
+	if (!pose_execution_state_.step_started_at.has_value()) {
+		return false;
+	}
+
+	return (this->now() - pose_execution_state_.step_started_at.value()).seconds() > sequence_step_timeout_sec_;
+}
+
+bool ArmControllerNode::is_sequence_total_timeout() const
+{
+	if (!pose_execution_state_.active || (pose_execution_state_.kind != ExecutionKind::SEQUENCE)) {
+		return false;
+	}
+
+	if (!pose_execution_state_.started_at.has_value()) {
+		return false;
+	}
+
+	return (this->now() - pose_execution_state_.started_at.value()).seconds() > sequence_total_timeout_sec_;
 }
 
 PoseExecutionResult ArmControllerNode::execute_pose_by_id(uint8_t pose_id, const std::string & trigger_source)
@@ -445,8 +713,13 @@ PoseExecutionResult ArmControllerNode::execute_pose_by_id(uint8_t pose_id, const
 	send_pose_target(command_target, pose_to_string(action_id.value()));
 
 	pose_execution_state_.active = true;
+	pose_execution_state_.kind = ExecutionKind::POSE;
 	pose_execution_state_.active_pose = action_id.value();
+	pose_execution_state_.active_sequence_name.reset();
+	pose_execution_state_.active_step_index = 0U;
 	pose_execution_state_.started_at = this->now();
+	pose_execution_state_.step_started_at = this->now();
+	pose_execution_state_.dwell_started_at.reset();
 	pose_execution_state_.feedback.stage = kStageInit;
 	pose_execution_state_.feedback.progress = 0.0F;
 
@@ -458,6 +731,196 @@ PoseExecutionResult ArmControllerNode::execute_pose_by_id(uint8_t pose_id, const
 		" from " + trigger_source + ".";
 	RCLCPP_INFO(this->get_logger(), "%s", result.message.c_str());
 	return result;
+}
+
+PoseExecutionResult ArmControllerNode::execute_sequence(
+	const std::vector<PoseSequenceStep> & sequence_steps,
+	const std::string & sequence_name,
+	const std::string & trigger_source)
+{
+	PoseExecutionResult result;
+
+	if (state_machine_.current_state() == ArmState::ESTOP) {
+		result.success = false;
+		result.message = "Cannot execute sequence while ESTOP is active.";
+		RCLCPP_WARN(this->get_logger(), "%s", result.message.c_str());
+		return result;
+	}
+
+	if (pose_execution_state_.active) {
+		result.success = false;
+		result.message = "Another execution is in progress.";
+		RCLCPP_WARN(this->get_logger(), "%s", result.message.c_str());
+		return result;
+	}
+
+	if (sequence_steps.empty()) {
+		result.success = false;
+		result.message = "Sequence is empty: " + sequence_name;
+		RCLCPP_WARN(this->get_logger(), "%s", result.message.c_str());
+		return result;
+	}
+
+	for (size_t i = 0; i < sequence_steps.size(); ++i) {
+		if (sequence_steps[i].dwell_sec < 0.0) {
+			result.success = false;
+			result.message =
+				"Sequence has negative dwell_sec at step " + std::to_string(i) + " for " + sequence_name;
+			RCLCPP_WARN(this->get_logger(), "%s", result.message.c_str());
+			return result;
+		}
+	}
+
+	PoseTarget first_target;
+	std::string resolve_error;
+	if (!resolve_pose_target_safe(sequence_steps.front().target, &first_target, &resolve_error)) {
+		result.success = false;
+		result.message = resolve_error;
+		RCLCPP_WARN(this->get_logger(), "%s", result.message.c_str());
+		return result;
+	}
+
+	send_pose_target(first_target, sequence_name + "_step_0");
+
+	pose_execution_state_.active = true;
+	pose_execution_state_.kind = ExecutionKind::SEQUENCE;
+	pose_execution_state_.active_pose.reset();
+	pose_execution_state_.active_sequence_name = sequence_name;
+	pose_execution_state_.active_step_index = 0U;
+	pose_execution_state_.started_at = this->now();
+	pose_execution_state_.step_started_at = this->now();
+	pose_execution_state_.dwell_started_at.reset();
+	pose_execution_state_.feedback.stage = kStageInit;
+	pose_execution_state_.feedback.progress = 0.0F;
+
+	last_pose_result_.success = false;
+	last_pose_result_.message = "Sequence execution started.";
+
+	result.success = true;
+	result.message =
+		"Accepted sequence " + sequence_name + " from " + trigger_source + ". steps=" +
+		std::to_string(sequence_steps.size());
+	RCLCPP_INFO(this->get_logger(), "%s", result.message.c_str());
+	return result;
+}
+
+PoseExecutionResult ArmControllerNode::wait_for_execution_result(double wait_timeout_sec) const
+{
+	PoseExecutionResult result;
+	const auto wait_started_at = this->now();
+	rclcpp::WallRate wait_rate(200.0);
+
+	while (rclcpp::ok()) {
+		if (!pose_execution_state_.active) {
+			return last_pose_result_;
+		}
+
+		if ((this->now() - wait_started_at).seconds() > wait_timeout_sec) {
+			result.success = false;
+			result.message = "Execution wait timeout.";
+			return result;
+		}
+
+		wait_rate.sleep();
+	}
+
+	result.success = false;
+	result.message = "Execution interrupted by shutdown.";
+	return result;
+}
+
+std::optional<std::string> ArmControllerNode::resolve_handle_kfs_sequence_key(
+	uint8_t mode,
+	uint8_t target_stair_level)
+{
+	if ((mode == kHandleKfsModePick) && (target_stair_level == kHandleKfsLevelDown)) {
+		return std::string("pick_down");
+	}
+
+	if ((mode == kHandleKfsModePick) && (target_stair_level == kHandleKfsLevelUp)) {
+		return std::string("pick_up");
+	}
+
+	if ((mode == kHandleKfsModePlace) && (target_stair_level == kHandleKfsLevelDown)) {
+		return std::string("place_down");
+	}
+
+	if ((mode == kHandleKfsModePlace) && (target_stair_level == kHandleKfsLevelUp)) {
+		return std::string("place_up");
+	}
+
+	return std::nullopt;
+}
+
+bool ArmControllerNode::load_sequence_steps_from_parameters(
+	const std::string & base_param,
+	const std::vector<PoseActionId> & fallback_pose_ids,
+	std::vector<PoseSequenceStep> * sequence_steps)
+{
+	if (sequence_steps == nullptr) {
+		return false;
+	}
+
+	const int default_step_count = static_cast<int>(fallback_pose_ids.size());
+	const int configured_step_count = this->declare_parameter<int>(base_param + ".step_count", default_step_count);
+	if (configured_step_count <= 0) {
+		RCLCPP_ERROR(
+			this->get_logger(),
+			"Invalid %s.step_count=%d, expected > 0.",
+			base_param.c_str(),
+			configured_step_count);
+		return false;
+	}
+
+	sequence_steps->clear();
+	sequence_steps->reserve(static_cast<size_t>(configured_step_count));
+	for (int i = 0; i < configured_step_count; ++i) {
+		PoseTarget fallback_target = pose_init_;
+		if (static_cast<size_t>(i) < fallback_pose_ids.size()) {
+			const auto pose_target = pose_target_of(fallback_pose_ids[static_cast<size_t>(i)]);
+			if (pose_target == nullptr) {
+				RCLCPP_ERROR(
+					this->get_logger(),
+					"Fallback pose is not configured for %s at step %d.",
+					base_param.c_str(),
+					i);
+				return false;
+			}
+			fallback_target = *pose_target;
+		} else if (!sequence_steps->empty()) {
+			fallback_target = sequence_steps->back().target;
+		}
+
+		PoseSequenceStep step;
+		step.target = fallback_target;
+		step.dwell_sec = 0.0;
+
+		const std::string step_prefix = base_param + ".steps." + std::to_string(i);
+		step.target.joint1 = this->declare_parameter<double>(step_prefix + ".joint1", step.target.joint1);
+		step.target.joint2 = this->declare_parameter<double>(step_prefix + ".joint2", step.target.joint2);
+		step.target.joint3 = this->declare_parameter<double>(step_prefix + ".joint3", step.target.joint3);
+		step.target.joint4 = this->declare_parameter<double>(step_prefix + ".joint4", step.target.joint4);
+		step.dwell_sec = this->declare_parameter<double>(step_prefix + ".dwell_sec", 0.0);
+
+		if (step.dwell_sec < 0.0) {
+			RCLCPP_ERROR(
+				this->get_logger(),
+				"Invalid dwell_sec for %s at step %d: %.3f",
+				base_param.c_str(),
+				i,
+				step.dwell_sec);
+			return false;
+		}
+
+		sequence_steps->push_back(step);
+	}
+
+	RCLCPP_INFO(
+		this->get_logger(),
+		"Loaded sequence %s with %zu steps.",
+		base_param.c_str(),
+		sequence_steps->size());
+	return true;
 }
 
 bool ArmControllerNode::resolve_pose_target_safe(
