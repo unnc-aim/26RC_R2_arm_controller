@@ -31,7 +31,21 @@ arm_controller:
       control_loop_hz: 1000.0
       speed: 0.1
       position_tolerance: 0.01
-      prefer_joint1_positive_direction_to_show_high: true
+      pose_timeout_sec: 8.0
+
+    joint_limits:
+      joint1:
+        min: -3.0
+        max: 3.0
+      joint2:
+        min: -3.0
+        max: 3.0
+      joint3:
+        min: -3.0
+        max: 3.0
+      joint4:
+        min: -3.0
+        max: 3.0
 
     poses:
       manual:
@@ -45,6 +59,47 @@ arm_controller:
         joint3: 0.0
         joint4: 0.0
       show_high:
+        joint1: -2.2454466819763184
+        joint2: 0.8751018047332764
+        joint3: 0.0
+        joint4: 0.0
+
+      pose_init:
+        joint1: 1.8369219303131104
+        joint2: -0.19687986373901367
+        joint3: 0.0
+        joint4: 0.0
+      pose_read_kfs_below:
+        joint1: 1.8369219303131104
+        joint2: -0.19687986373901367
+        joint3: 0.0
+        joint4: 0.0
+      pose_read_kfs_above:
+        joint1: -2.2454466819763184
+        joint2: 0.8751018047332764
+        joint3: 0.0
+        joint4: 0.0
+      pose_read_aruco_forward:
+        joint1: 1.8369219303131104
+        joint2: -0.19687986373901367
+        joint3: 0.0
+        joint4: 0.0
+      pose_climb_r1:
+        joint1: -2.2454466819763184
+        joint2: 0.8751018047332764
+        joint3: 0.0
+        joint4: 0.0
+      pose_weight_forward:
+        joint1: 1.8369219303131104
+        joint2: -0.19687986373901367
+        joint3: 0.0
+        joint4: 0.0
+      pose_level2:
+        joint1: -2.2454466819763184
+        joint2: 0.8751018047332764
+        joint3: 0.0
+        joint4: 0.0
+      pose_level3:
         joint1: -2.2454466819763184
         joint2: 0.8751018047332764
         joint3: 0.0

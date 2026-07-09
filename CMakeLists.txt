@@ -10,7 +10,9 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(custom_msgs REQUIRED)
+find_package(rc_interfaces REQUIRED)
 
 add_executable(arm_controller_node
   src/main.cpp
@@ -26,7 +28,9 @@ target_include_directories(arm_controller_node PRIVATE
 
 ament_target_dependencies(arm_controller_node
   rclcpp
+  rclcpp_action
   custom_msgs
+  rc_interfaces
 )
 
 install(TARGETS arm_controller_node

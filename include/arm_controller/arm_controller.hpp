@@ -1,7 +1,10 @@
 #ifndef ARM_CONTROLLER__ARM_CONTROLLER_HPP_
 #define ARM_CONTROLLER__ARM_CONTROLLER_HPP_
 
+#include <array>
 #include <chrono>
+#include <cstdint>
+#include <optional>
 #include <string>
 
 #include "custom_msgs/msg/read_dm_motor.hpp"
@@ -22,12 +25,61 @@ struct JointTopics
   std::string write_topic;
 };
 
+struct JointLimit
+{
+  float min_position{0.0F};
+  float max_position{0.0F};
+};
+
+enum class PoseActionId : uint8_t
+{
+  POSE_INIT = 0,
+  POSE_READ_KFS_BELOW = 1,
+  POSE_READ_KFS_ABOVE = 2,
+  POSE_READ_ARUCO_FORWARD = 3,
+  POSE_CLIMB_R1 = 4,
+  POSE_WEIGHT_FORWARD = 5,
+  POSE_LEVEL2 = 6,
+  POSE_LEVEL3 = 7,
+};
+
+struct PoseExecutionRequest
+{
+  uint8_t pose_id{0U};
+};
+
+struct PoseExecutionFeedback
+{
+  uint8_t stage{0U};
+  float progress{0.0F};
+};
+
+struct PoseExecutionResult
+{
+  bool success{false};
+  std::string message;
+};
+
+struct PoseExecutionState
+{
+  bool active{false};
+  std::optional<PoseActionId> active_pose{};
+  std::optional<rclcpp::Time> started_at{};
+  PoseExecutionFeedback feedback{};
+};
+
 class ArmControllerNode : public rclcpp::Node
 {
 public:
   explicit ArmControllerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
+  // PoseArm.action future adapter can call this method directly.
+  [[nodiscard]] PoseExecutionResult execute_pose_request(const PoseExecutionRequest & request);
+  [[nodiscard]] PoseExecutionFeedback current_pose_feedback() const;
+
 private:
+  static constexpr size_t kPoseCount = 8U;
+
   void load_parameters();
   void setup_ros_interfaces();
 
@@ -38,10 +90,27 @@ private:
   void joint4_callback(const custom_msgs::msg::ReadDmMotor::SharedPtr msg);
   void control_timer_callback();
 
+  void initialize_pose_targets();
+  void update_pose_execution_status();
+  void mark_pose_execution_failed(const std::string & message);
+  [[nodiscard]] bool is_pose_execution_timeout() const;
+  [[nodiscard]] bool resolve_pose_target_safe(
+    const PoseTarget & requested_target,
+    PoseTarget * resolved_target,
+    std::string * error_message) const;
+  [[nodiscard]] static std::optional<float> find_safe_target_position(
+    float current_position,
+    float requested_target,
+    const JointLimit & limit);
+
   void apply_transition(const StateTransition & transition);
   void send_pose_target(const PoseTarget & target, const std::string & pose_name);
+  [[nodiscard]] PoseExecutionResult execute_pose_by_id(uint8_t pose_id, const std::string & trigger_source);
+  [[nodiscard]] static std::optional<PoseActionId> to_pose_action_id(uint8_t pose_id);
+  [[nodiscard]] const PoseTarget * pose_target_of(PoseActionId pose_id) const;
+  [[nodiscard]] static const char * pose_to_string(PoseActionId pose_id);
+
   void publish_target_command(const PoseTarget & target, float speed);
-  [[nodiscard]] PoseTarget build_command_target(const PoseTarget & target, bool force_joint1_positive_direction) const;
   void send_disable_command_once();
   void log_status_warnings();
 
@@ -56,12 +125,26 @@ private:
   double loop_hz_{1000.0};
   float motion_speed_{5.0F};
   float position_tolerance_{5.0F};
-  bool prefer_joint1_positive_direction_to_show_high_{true};
+  double pose_timeout_sec_{8.0};
   int warn_throttle_ms_{1000};
 
   PoseTarget manual_pose_{};
   PoseTarget show_low_pose_{};
   PoseTarget show_high_pose_{};
+
+  PoseTarget pose_init_{};
+  PoseTarget pose_read_kfs_below_{};
+  PoseTarget pose_read_kfs_above_{};
+  PoseTarget pose_read_aruco_forward_{};
+  PoseTarget pose_climb_r1_{};
+  PoseTarget pose_weight_forward_{};
+  PoseTarget pose_level2_{};
+  PoseTarget pose_level3_{};
+  std::array<PoseTarget, kPoseCount> pose_targets_{};
+  std::array<JointLimit, 4> joint_limits_{};
+
+  PoseExecutionState pose_execution_state_{};
+  PoseExecutionResult last_pose_result_{};
 
   custom_msgs::msg::ReadSBUSRC latest_sbus_{};
   bool has_sbus_message_{false};
