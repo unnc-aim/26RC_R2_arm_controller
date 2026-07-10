@@ -56,14 +56,23 @@ bool is_position_within_joint_limit(float position, const JointLimit & limit, fl
 		(normalized_position <= limit.max_position + epsilon);
 }
 
-float angular_error_with_wrap(float target_position, float current_position)
+float unwrap_angle_near_reference(float raw_position, float reference_position)
 {
-	const float raw_error = target_position - current_position;
-	const float plus_turn_error = raw_error + kTwoPi;
-	const float minus_turn_error = raw_error - kTwoPi;
-	return std::min(
-		std::fabs(raw_error),
-		std::min(std::fabs(plus_turn_error), std::fabs(minus_turn_error)));
+	const float normalized_position = normalize_wrapped_angle(raw_position);
+	const int nearest_turn = static_cast<int>(std::lround((reference_position - normalized_position) / kTwoPi));
+
+	float best_position = normalized_position;
+	float best_error = std::numeric_limits<float>::max();
+	for (int turn_offset = -1; turn_offset <= 1; ++turn_offset) {
+		const float candidate = normalized_position + static_cast<float>(nearest_turn + turn_offset) * kTwoPi;
+		const float candidate_error = std::fabs(candidate - reference_position);
+		if (candidate_error < best_error) {
+			best_position = candidate;
+			best_error = candidate_error;
+		}
+	}
+
+	return best_position;
 }
 
 std::string describe_joint_limit(const JointLimit & limit)
@@ -555,21 +564,25 @@ void ArmControllerNode::sbus_callback(const custom_msgs::msg::ReadSBUSRC::Shared
 
 void ArmControllerNode::joint1_callback(const custom_msgs::msg::ReadDmMotor::SharedPtr msg)
 {
+	update_continuous_joint_position(0U, msg->position);
 	motor_controller_.update_joint1_feedback(*msg);
 }
 
 void ArmControllerNode::joint2_callback(const custom_msgs::msg::ReadDmMotor::SharedPtr msg)
 {
+	update_continuous_joint_position(1U, msg->position);
 	motor_controller_.update_joint2_feedback(*msg);
 }
 
 void ArmControllerNode::joint3_callback(const custom_msgs::msg::ReadDmMotor::SharedPtr msg)
 {
+	update_continuous_joint_position(2U, msg->position);
 	motor_controller_.update_joint3_feedback(*msg);
 }
 
 void ArmControllerNode::joint4_callback(const custom_msgs::msg::ReadDmMotor::SharedPtr msg)
 {
+	update_continuous_joint_position(3U, msg->position);
 	motor_controller_.update_joint4_feedback(*msg);
 }
 
@@ -1287,15 +1300,21 @@ bool ArmControllerNode::resolve_pose_target_safe(
 			return false;
 		}
 
+		const auto current_position = current_joint_position_for_control(i);
+		if (!current_position.has_value()) {
+			*error_message = "Cannot execute pose before all enabled joint feedback is ready.";
+			return false;
+		}
+
 		const auto resolved = find_safe_target_position(
-			feedbacks[i]->value().position,
+			current_position.value(),
 			requested_positions[i],
 			joint_limits_[i]);
 		if (!resolved.has_value()) {
 			*error_message =
 				"No safe target for joint" + std::to_string(i + 1) +
 				" within limits " + describe_joint_limit(joint_limits_[i]) + " from current=" +
-				std::to_string(feedbacks[i]->value().position) + " requested=" + std::to_string(requested_positions[i]);
+				std::to_string(current_position.value()) + " requested=" + std::to_string(requested_positions[i]);
 			return false;
 		}
 
@@ -1309,19 +1328,43 @@ bool ArmControllerNode::resolve_pose_target_safe(
 	return true;
 }
 
+std::optional<float> ArmControllerNode::current_joint_position_for_control(size_t joint_index) const
+{
+	if (joint_index >= continuous_joint_positions_.size()) {
+		return std::nullopt;
+	}
+
+	return continuous_joint_positions_[joint_index];
+}
+
+void ArmControllerNode::update_continuous_joint_position(size_t joint_index, float raw_position)
+{
+	if (joint_index >= continuous_joint_positions_.size()) {
+		return;
+	}
+
+	if (!is_wrapped_joint_limit(joint_limits_[joint_index])) {
+		continuous_joint_positions_[joint_index] = raw_position;
+		return;
+	}
+
+	if (!continuous_joint_positions_[joint_index].has_value()) {
+		continuous_joint_positions_[joint_index] = normalize_wrapped_angle(raw_position);
+		return;
+	}
+
+	continuous_joint_positions_[joint_index] = unwrap_angle_near_reference(
+		raw_position,
+		continuous_joint_positions_[joint_index].value());
+}
+
 bool ArmControllerNode::motion_feedback_ready() const
 {
-	const std::array<const std::optional<custom_msgs::msg::ReadDmMotor> *, 4> feedbacks{
-		&motor_controller_.joint1_feedback(),
-		&motor_controller_.joint2_feedback(),
-		&motor_controller_.joint3_feedback(),
-		&motor_controller_.joint4_feedback()};
-
-	for (size_t i = 0; i < feedbacks.size(); ++i) {
+	for (size_t i = 0; i < continuous_joint_positions_.size(); ++i) {
 		if (!joint_enabled_[i]) {
 			continue;
 		}
-		if (!feedbacks[i]->has_value()) {
+		if (!continuous_joint_positions_[i].has_value()) {
 			return false;
 		}
 	}
@@ -1343,27 +1386,19 @@ float ArmControllerNode::max_active_joint_error(const PoseTarget & target) const
 	float max_error = 0.0F;
 
 	if (joint_enabled_[0]) {
-		const float joint1_error = is_wrapped_joint_limit(joint_limits_[0])
-			? angular_error_with_wrap(target.joint1, motor_controller_.joint1_feedback().value().position)
-			: std::fabs(target.joint1 - motor_controller_.joint1_feedback().value().position);
+		const float joint1_error = std::fabs(target.joint1 - current_joint_position_for_control(0U).value());
 		max_error = std::max(max_error, joint1_error);
 	}
 	if (joint_enabled_[1]) {
-		const float joint2_error = is_wrapped_joint_limit(joint_limits_[1])
-			? angular_error_with_wrap(target.joint2, motor_controller_.joint2_feedback().value().position)
-			: std::fabs(target.joint2 - motor_controller_.joint2_feedback().value().position);
+		const float joint2_error = std::fabs(target.joint2 - current_joint_position_for_control(1U).value());
 		max_error = std::max(max_error, joint2_error);
 	}
 	if (joint_enabled_[2]) {
-		const float joint3_error = is_wrapped_joint_limit(joint_limits_[2])
-			? angular_error_with_wrap(target.joint3, motor_controller_.joint3_feedback().value().position)
-			: std::fabs(target.joint3 - motor_controller_.joint3_feedback().value().position);
+		const float joint3_error = std::fabs(target.joint3 - current_joint_position_for_control(2U).value());
 		max_error = std::max(max_error, joint3_error);
 	}
 	if (joint_enabled_[3]) {
-		const float joint4_error = is_wrapped_joint_limit(joint_limits_[3])
-			? angular_error_with_wrap(target.joint4, motor_controller_.joint4_feedback().value().position)
-			: std::fabs(target.joint4 - motor_controller_.joint4_feedback().value().position);
+		const float joint4_error = std::fabs(target.joint4 - current_joint_position_for_control(3U).value());
 		max_error = std::max(max_error, joint4_error);
 	}
 

@@ -165,6 +165,7 @@ private:
   [[nodiscard]] bool motion_feedback_ready() const;
   [[nodiscard]] bool motion_target_reached() const;
   [[nodiscard]] float max_active_joint_error(const PoseTarget & target) const;
+  [[nodiscard]] std::optional<float> current_joint_position_for_control(size_t joint_index) const;
   [[nodiscard]] bool lookup_named_pose(
     const std::string & pose_name,
     PoseTarget * pose_target) const;
@@ -172,6 +173,7 @@ private:
     float current_position,
     float requested_target,
     const JointLimit & limit);
+  void update_continuous_joint_position(size_t joint_index, float raw_position);
 
   void apply_transition(const StateTransition & transition);
   void send_pose_target(const PoseTarget & target, const std::string & pose_name);
@@ -226,6 +228,7 @@ private:
   std::unordered_map<std::string, std::vector<PoseSequenceStep>> handle_kfs_sequences_{};
   std::array<JointLimit, 4> joint_limits_{};
   std::array<bool, 4> joint_enabled_{true, true, true, true};
+  std::array<std::optional<float>, 4> continuous_joint_positions_{};
 
   PoseExecutionState pose_execution_state_{};
   PoseExecutionResult last_pose_result_{};
