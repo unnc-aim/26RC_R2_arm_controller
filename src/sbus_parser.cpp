@@ -26,7 +26,8 @@ SbusParseOutput SbusParser::parse(
     return output;
   }
 
-  output.sbus_ok = (msg.online != 0U) && (msg.fail_safe == 0U) && (msg.frame_lost == 0U);
+  // 临时策略：fail_safe 不参与 arm_controller 的健康判定。
+  output.sbus_ok = (msg.online != 0U) && (msg.frame_lost == 0U);
 
   const uint16_t estop_value = msg.channels[static_cast<std::size_t>(config_.estop_channel)];
   // 急停采用滞回：高阈值触发，低阈值解除，避免拨杆抖动反复进出。

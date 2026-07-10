@@ -31,9 +31,9 @@ arm_controller:
       control_loop_hz: 1000.0
       speed: 0.1
       position_tolerance: 0.01
-      pose_timeout_sec: 8.0
-      sequence_step_timeout_sec: 8.0
-      sequence_total_timeout_sec: 60.0
+      pose_timeout_sec: 30.0
+      sequence_step_timeout_sec: 30.0
+      sequence_total_timeout_sec: 200.0
 
     joint_limits:
       joint1:
@@ -44,7 +44,7 @@ arm_controller:
         max: 0.90
       joint3:
         min: -1.04
-        max: 1.98
+        max: 2.6
       joint4:
         min: -3.141592653589793
         max: 3.141592653589793
@@ -74,6 +74,9 @@ arm_controller:
             dwell_sec: 0.5
           2:
             pose: pose_init
+            dwell_sec: 0.0
+          3:
+            pose: pose1
             dwell_sec: 0.0
 
       place_down:
@@ -140,10 +143,10 @@ arm_controller:
         joint4: -1.5453654527664185
 
       pose_init:
-        joint1: -2.2454466819763184
-        joint2: 0.8751018047332764
-        joint3: 2.5148561000823975
-        joint4: 1.5440232753753662
+        joint1: 2.0980865955352783
+        joint2: -0.009156227111816406
+        joint3: 1.7674124240875244
+        joint4: -1.4798825979232788
       pose_read_kfs_below:
         joint1: 1.8369219303131104
         joint2: -0.19687986373901367
@@ -179,3 +182,8 @@ arm_controller:
         joint2: 0.8751018047332764
         joint3: 0.0
         joint4: 0.0
+      pose1:
+        joint1: 2.160980463027954
+        joint2: 0.8751018047332764
+        joint3: 0.22324538230895996
+        joint4: -1.5453654527664185

@@ -595,20 +595,34 @@ void ArmControllerNode::control_timer_callback()
 				latest_sbus_.channels.size());
 		}
 
+		if (latest_sbus_.online == 0U) {
+			RCLCPP_WARN_THROTTLE(
+				this->get_logger(),
+				*this->get_clock(),
+				warn_throttle_ms_,
+				"SBUS offline, force disable outputs.");
+			if (pose_execution_state_.active) {
+				mark_pose_execution_failed("Pose execution interrupted by SBUS offline.");
+			}
+			update_action_servers();
+			send_disable_command_once();
+			return;
+		}
+
 		if (!parse_output.sbus_ok) {
 			RCLCPP_WARN_THROTTLE(
 				this->get_logger(),
 				*this->get_clock(),
 				warn_throttle_ms_,
-				"SBUS is not healthy, mode event masked. online=%u fail_safe=%u frame_lost=%u",
+				"SBUS is not healthy. online=%u frame_lost=%u",
 				latest_sbus_.online,
-				latest_sbus_.fail_safe,
 				latest_sbus_.frame_lost);
 		}
 
 		estop_asserted = parse_output.estop_asserted;
 		estop_released = parse_output.estop_released;
-		mode_event = parse_output.sbus_ok ? parse_output.mode_event : ModeEvent::NONE;
+		// 临时策略：屏蔽 SBUS 模式切换，只保留急停链路。
+		mode_event = ModeEvent::NONE;
 	}
 
 	const auto transition = state_machine_.update(estop_asserted, estop_released, mode_event);
@@ -1552,14 +1566,13 @@ void ArmControllerNode::log_status_warnings()
 			*this->get_clock(),
 			warn_throttle_ms_,
 			"No SBUS message received yet.");
-	} else if ((latest_sbus_.online == 0U) || (latest_sbus_.fail_safe != 0U) || (latest_sbus_.frame_lost != 0U)) {
+	} else if ((latest_sbus_.online == 0U) || (latest_sbus_.frame_lost != 0U)) {
 		RCLCPP_WARN_THROTTLE(
 			this->get_logger(),
 			*this->get_clock(),
 			warn_throttle_ms_,
-			"SBUS abnormal: online=%u fail_safe=%u frame_lost=%u",
+			"SBUS abnormal: online=%u frame_lost=%u",
 			latest_sbus_.online,
-			latest_sbus_.fail_safe,
 			latest_sbus_.frame_lost);
 	}
 
