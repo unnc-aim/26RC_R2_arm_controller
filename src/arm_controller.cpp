@@ -6,6 +6,7 @@
 #include <functional>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <unordered_set>
 
 using namespace std::chrono_literals;
@@ -25,7 +26,45 @@ constexpr uint8_t kHandleKfsModePick = 0U;
 constexpr uint8_t kHandleKfsModePlace = 1U;
 constexpr uint8_t kHandleKfsLevelDown = 0U;
 constexpr uint8_t kHandleKfsLevelUp = 1U;
+constexpr float kPi = 3.14159265358979323846F;
 constexpr float kTwoPi = 6.28318530717958647692F;
+
+float normalize_wrapped_angle(float angle)
+{
+	while (angle > kPi) {
+		angle -= kTwoPi;
+	}
+	while (angle < -kPi) {
+		angle += kTwoPi;
+	}
+	return angle;
+}
+
+bool is_wrapped_joint_limit(const JointLimit & limit)
+{
+	return limit.min_position > limit.max_position;
+}
+
+bool is_position_within_joint_limit(float position, const JointLimit & limit, float epsilon)
+{
+	if (!is_wrapped_joint_limit(limit)) {
+		return (position >= limit.min_position - epsilon) && (position <= limit.max_position + epsilon);
+	}
+
+	const float normalized_position = normalize_wrapped_angle(position);
+	return (normalized_position >= limit.min_position - epsilon) ||
+		(normalized_position <= limit.max_position + epsilon);
+}
+
+std::string describe_joint_limit(const JointLimit & limit)
+{
+	if (!is_wrapped_joint_limit(limit)) {
+		return "[" + std::to_string(limit.min_position) + ", " + std::to_string(limit.max_position) + "]";
+	}
+
+	return "[" + std::to_string(limit.min_position) + ", pi] U [-pi, " +
+		std::to_string(limit.max_position) + "]";
+}
 
 uint8_t stage_for_sequence_dwell(const std::string & sequence_name)
 {
@@ -71,12 +110,16 @@ void ArmControllerNode::load_parameters()
 
 	joint1_topics_.read_topic = this->declare_parameter<std::string>("joint1.read_topic", "/joint1/read");
 	joint1_topics_.write_topic = this->declare_parameter<std::string>("joint1.write_topic", "/joint1/write");
+	joint_enabled_[0] = this->declare_parameter<bool>("joint1.enabled", true);
 	joint2_topics_.read_topic = this->declare_parameter<std::string>("joint2.read_topic", "/joint2/read");
 	joint2_topics_.write_topic = this->declare_parameter<std::string>("joint2.write_topic", "/joint2/write");
+	joint_enabled_[1] = this->declare_parameter<bool>("joint2.enabled", true);
 	joint3_topics_.read_topic = this->declare_parameter<std::string>("joint3.read_topic", "/joint3/read");
 	joint3_topics_.write_topic = this->declare_parameter<std::string>("joint3.write_topic", "/joint3/write");
+	joint_enabled_[2] = this->declare_parameter<bool>("joint3.enabled", true);
 	joint4_topics_.read_topic = this->declare_parameter<std::string>("joint4.read_topic", "/joint4/read");
 	joint4_topics_.write_topic = this->declare_parameter<std::string>("joint4.write_topic", "/joint4/write");
+	joint_enabled_[3] = this->declare_parameter<bool>("joint4.enabled", true);
 
 	loop_hz_ = this->declare_parameter<double>("motion.control_loop_hz", 1000.0);
 	motion_speed_ = this->declare_parameter<double>("motion.speed", 5.0);
@@ -236,14 +279,14 @@ void ArmControllerNode::load_parameters()
 	}
 
 	for (size_t i = 0; i < joint_limits_.size(); ++i) {
-		if (joint_limits_[i].min_position >= joint_limits_[i].max_position) {
+		if (joint_limits_[i].min_position == joint_limits_[i].max_position) {
 			RCLCPP_ERROR(
 				this->get_logger(),
-				"Invalid joint limit for joint%zu: min=%.3f max=%.3f, expected min < max.",
+				"Invalid joint limit for joint%zu: min=%.3f max=%.3f, expected min != max.",
 				i + 1,
 				joint_limits_[i].min_position,
 				joint_limits_[i].max_position);
-			throw std::invalid_argument("joint_limits min must be < max");
+			throw std::invalid_argument("joint_limits min must not equal max");
 		}
 	}
 }
@@ -371,7 +414,7 @@ void ArmControllerNode::control_timer_callback()
 		publish_target_command(motor_controller_.active_target().value(), motion_speed_);
 	}
 
-	if (motor_controller_.has_active_target() && motor_controller_.target_reached(position_tolerance_)) {
+	if (motor_controller_.has_active_target() && motion_target_reached()) {
 		if (!motor_controller_.motion_completed()) {
 			RCLCPP_INFO(this->get_logger(), "Motion finished: all joints reached target within tolerance.");
 			motor_controller_.mark_motion_completed();
@@ -535,16 +578,12 @@ void ArmControllerNode::update_single_pose_execution_status()
 	pose_execution_state_.feedback.stage = kStageReachingOut;
 	pose_execution_state_.feedback.progress = 0.2F;
 
-	if (!motor_controller_.feedback_ready() || !motor_controller_.has_active_target()) {
+	if (!motion_feedback_ready() || !motor_controller_.has_active_target()) {
 		return;
 	}
 
 	const auto & target = motor_controller_.active_target().value();
-	const float joint1_error = std::fabs(target.joint1 - motor_controller_.joint1_feedback().value().position);
-	const float joint2_error = std::fabs(target.joint2 - motor_controller_.joint2_feedback().value().position);
-	const float joint3_error = std::fabs(target.joint3 - motor_controller_.joint3_feedback().value().position);
-	const float joint4_error = std::fabs(target.joint4 - motor_controller_.joint4_feedback().value().position);
-	const float max_error = std::max(std::max(joint1_error, joint2_error), std::max(joint3_error, joint4_error));
+	const float max_error = max_active_joint_error(target);
 
 	const float safe_scale = std::max(position_tolerance_ * 10.0F, 0.001F);
 	const float normalized_remaining = std::clamp(max_error / safe_scale, 0.0F, 1.0F);
@@ -606,16 +645,12 @@ void ArmControllerNode::update_sequence_execution_status()
 		}
 		pose_execution_state_.feedback.progress = 0.2F;
 
-		if (!motor_controller_.feedback_ready() || !motor_controller_.has_active_target()) {
+		if (!motion_feedback_ready() || !motor_controller_.has_active_target()) {
 			return;
 		}
 
 		const auto & target = motor_controller_.active_target().value();
-		const float joint1_error = std::fabs(target.joint1 - motor_controller_.joint1_feedback().value().position);
-		const float joint2_error = std::fabs(target.joint2 - motor_controller_.joint2_feedback().value().position);
-		const float joint3_error = std::fabs(target.joint3 - motor_controller_.joint3_feedback().value().position);
-		const float joint4_error = std::fabs(target.joint4 - motor_controller_.joint4_feedback().value().position);
-		const float max_error = std::max(std::max(joint1_error, joint2_error), std::max(joint3_error, joint4_error));
+		const float max_error = max_active_joint_error(target);
 
 		const float safe_scale = std::max(position_tolerance_ * 10.0F, 0.001F);
 		const float normalized_remaining = std::clamp(max_error / safe_scale, 0.0F, 1.0F);
@@ -992,16 +1027,16 @@ bool ArmControllerNode::resolve_pose_target_safe(
 		return false;
 	}
 
-	if (!motor_controller_.feedback_ready()) {
+	if (!motion_feedback_ready()) {
 		*error_message = "Cannot execute pose before all joint feedback is ready.";
 		return false;
 	}
 
-	const std::array<float, 4> current_positions{
-		motor_controller_.joint1_feedback().value().position,
-		motor_controller_.joint2_feedback().value().position,
-		motor_controller_.joint3_feedback().value().position,
-		motor_controller_.joint4_feedback().value().position};
+	const std::array<const std::optional<custom_msgs::msg::ReadDmMotor> *, 4> feedbacks{
+		&motor_controller_.joint1_feedback(),
+		&motor_controller_.joint2_feedback(),
+		&motor_controller_.joint3_feedback(),
+		&motor_controller_.joint4_feedback()};
 
 	const std::array<float, 4> requested_positions{
 		requested_target.joint1,
@@ -1011,13 +1046,25 @@ bool ArmControllerNode::resolve_pose_target_safe(
 
 	std::array<float, 4> resolved_positions{};
 	for (size_t i = 0; i < 4; ++i) {
-		const auto resolved = find_safe_target_position(current_positions[i], requested_positions[i], joint_limits_[i]);
+		if (!joint_enabled_[i]) {
+			resolved_positions[i] = requested_positions[i];
+			continue;
+		}
+
+		if (!feedbacks[i]->has_value()) {
+			*error_message = "Cannot execute pose before all enabled joint feedback is ready.";
+			return false;
+		}
+
+		const auto resolved = find_safe_target_position(
+			feedbacks[i]->value().position,
+			requested_positions[i],
+			joint_limits_[i]);
 		if (!resolved.has_value()) {
 			*error_message =
 				"No safe target for joint" + std::to_string(i + 1) +
-				" within limits [" + std::to_string(joint_limits_[i].min_position) +
-				", " + std::to_string(joint_limits_[i].max_position) + "] from current=" +
-				std::to_string(current_positions[i]) + " requested=" + std::to_string(requested_positions[i]);
+				" within limits " + describe_joint_limit(joint_limits_[i]) + " from current=" +
+				std::to_string(feedbacks[i]->value().position) + " requested=" + std::to_string(requested_positions[i]);
 			return false;
 		}
 
@@ -1031,16 +1078,93 @@ bool ArmControllerNode::resolve_pose_target_safe(
 	return true;
 }
 
+bool ArmControllerNode::motion_feedback_ready() const
+{
+	const std::array<const std::optional<custom_msgs::msg::ReadDmMotor> *, 4> feedbacks{
+		&motor_controller_.joint1_feedback(),
+		&motor_controller_.joint2_feedback(),
+		&motor_controller_.joint3_feedback(),
+		&motor_controller_.joint4_feedback()};
+
+	for (size_t i = 0; i < feedbacks.size(); ++i) {
+		if (!joint_enabled_[i]) {
+			continue;
+		}
+		if (!feedbacks[i]->has_value()) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool ArmControllerNode::motion_target_reached() const
+{
+	if (!motor_controller_.has_active_target() || !motion_feedback_ready()) {
+		return false;
+	}
+
+	return max_active_joint_error(motor_controller_.active_target().value()) < position_tolerance_;
+}
+
+float ArmControllerNode::max_active_joint_error(const PoseTarget & target) const
+{
+	float max_error = 0.0F;
+
+	if (joint_enabled_[0]) {
+		max_error = std::max(max_error, std::fabs(target.joint1 - motor_controller_.joint1_feedback().value().position));
+	}
+	if (joint_enabled_[1]) {
+		max_error = std::max(max_error, std::fabs(target.joint2 - motor_controller_.joint2_feedback().value().position));
+	}
+	if (joint_enabled_[2]) {
+		max_error = std::max(max_error, std::fabs(target.joint3 - motor_controller_.joint3_feedback().value().position));
+	}
+	if (joint_enabled_[3]) {
+		max_error = std::max(max_error, std::fabs(target.joint4 - motor_controller_.joint4_feedback().value().position));
+	}
+
+	return max_error;
+}
+
 std::optional<float> ArmControllerNode::find_safe_target_position(
 	float current_position,
 	float requested_target,
 	const JointLimit & limit)
 {
-	if ((current_position < limit.min_position) || (current_position > limit.max_position)) {
+	const float kEpsilon = 1e-5F;
+	if (!is_position_within_joint_limit(current_position, limit, kEpsilon)) {
 		return std::nullopt;
 	}
 
-	const float kEpsilon = 1e-5F;
+	if (is_wrapped_joint_limit(limit)) {
+		const int nearest_turn = static_cast<int>(std::lround((current_position - requested_target) / kTwoPi));
+
+		float best_target = 0.0F;
+		float best_cost = std::numeric_limits<float>::max();
+		bool found = false;
+
+		for (int turn_offset = -1; turn_offset <= 1; ++turn_offset) {
+			const float candidate = requested_target + static_cast<float>(nearest_turn + turn_offset) * kTwoPi;
+			if (!is_position_within_joint_limit(candidate, limit, kEpsilon)) {
+				continue;
+			}
+
+			const float movement_cost = std::fabs(candidate - current_position);
+			if (!found || (movement_cost < best_cost)) {
+				best_cost = movement_cost;
+				best_target = candidate;
+				found = true;
+			}
+		}
+
+		if (!found) {
+			return std::nullopt;
+		}
+
+		return best_target;
+	}
+
 	const int kMinTurns = static_cast<int>(std::ceil((limit.min_position - requested_target) / kTwoPi));
 	const int kMaxTurns = static_cast<int>(std::floor((limit.max_position - requested_target) / kTwoPi));
 
@@ -1169,21 +1293,21 @@ void ArmControllerNode::publish_target_command(const PoseTarget & target, float 
 	custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit joint3_msg;
 	custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit joint4_msg;
 
-	joint1_msg.enable = 1U;
-	joint1_msg.position = target.joint1;
-	joint1_msg.speed = speed;
+	joint1_msg.enable = joint_enabled_[0] ? 1U : 0U;
+	joint1_msg.position = joint_enabled_[0] ? target.joint1 : 0.0F;
+	joint1_msg.speed = joint_enabled_[0] ? speed : 0.0F;
 
-	joint2_msg.enable = 1U;
-	joint2_msg.position = target.joint2;
-	joint2_msg.speed = speed;
+	joint2_msg.enable = joint_enabled_[1] ? 1U : 0U;
+	joint2_msg.position = joint_enabled_[1] ? target.joint2 : 0.0F;
+	joint2_msg.speed = joint_enabled_[1] ? speed : 0.0F;
 
-	joint3_msg.enable = 1U;
-	joint3_msg.position = target.joint3;
-	joint3_msg.speed = speed;
+	joint3_msg.enable = joint_enabled_[2] ? 1U : 0U;
+	joint3_msg.position = joint_enabled_[2] ? target.joint3 : 0.0F;
+	joint3_msg.speed = joint_enabled_[2] ? speed : 0.0F;
 
-	joint4_msg.enable = 1U;
-	joint4_msg.position = target.joint4;
-	joint4_msg.speed = speed;
+	joint4_msg.enable = joint_enabled_[3] ? 1U : 0U;
+	joint4_msg.position = joint_enabled_[3] ? target.joint4 : 0.0F;
+	joint4_msg.speed = joint_enabled_[3] ? speed : 0.0F;
 
 	joint1_pub_->publish(joint1_msg);
 	joint2_pub_->publish(joint2_msg);
@@ -1210,28 +1334,28 @@ void ArmControllerNode::log_status_warnings()
 			latest_sbus_.frame_lost);
 	}
 
-	if (motor_controller_.joint1_has_fault()) {
+	if (joint_enabled_[0] && motor_controller_.joint1_has_fault()) {
 		RCLCPP_WARN_THROTTLE(
 			this->get_logger(),
 			*this->get_clock(),
 			warn_throttle_ms_,
 			"Joint1 feedback indicates communication/power/thermal fault.");
 	}
-	if (motor_controller_.joint2_has_fault()) {
+	if (joint_enabled_[1] && motor_controller_.joint2_has_fault()) {
 		RCLCPP_WARN_THROTTLE(
 			this->get_logger(),
 			*this->get_clock(),
 			warn_throttle_ms_,
 			"Joint2 feedback indicates communication/power/thermal fault.");
 	}
-	if (motor_controller_.joint3_has_fault()) {
+	if (joint_enabled_[2] && motor_controller_.joint3_has_fault()) {
 		RCLCPP_WARN_THROTTLE(
 			this->get_logger(),
 			*this->get_clock(),
 			warn_throttle_ms_,
 			"Joint3 feedback indicates communication/power/thermal fault.");
 	}
-	if (motor_controller_.joint4_has_fault()) {
+	if (joint_enabled_[3] && motor_controller_.joint4_has_fault()) {
 		RCLCPP_WARN_THROTTLE(
 			this->get_logger(),
 			*this->get_clock(),

@@ -136,6 +136,9 @@ private:
     const std::string & base_param,
     const std::vector<PoseActionId> & fallback_pose_ids,
     std::vector<PoseSequenceStep> * sequence_steps);
+  [[nodiscard]] bool motion_feedback_ready() const;
+  [[nodiscard]] bool motion_target_reached() const;
+  [[nodiscard]] float max_active_joint_error(const PoseTarget & target) const;
   [[nodiscard]] bool lookup_named_pose(
     const std::string & pose_name,
     PoseTarget * pose_target) const;
@@ -194,6 +197,7 @@ private:
   std::array<PoseTarget, kPoseCount> pose_targets_{};
   std::unordered_map<std::string, std::vector<PoseSequenceStep>> handle_kfs_sequences_{};
   std::array<JointLimit, 4> joint_limits_{};
+  std::array<bool, 4> joint_enabled_{true, true, true, true};
 
   PoseExecutionState pose_execution_state_{};
   PoseExecutionResult last_pose_result_{};
