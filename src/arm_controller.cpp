@@ -56,6 +56,16 @@ bool is_position_within_joint_limit(float position, const JointLimit & limit, fl
 		(normalized_position <= limit.max_position + epsilon);
 }
 
+float angular_error_with_wrap(float target_position, float current_position)
+{
+	const float raw_error = target_position - current_position;
+	const float plus_turn_error = raw_error + kTwoPi;
+	const float minus_turn_error = raw_error - kTwoPi;
+	return std::min(
+		std::fabs(raw_error),
+		std::min(std::fabs(plus_turn_error), std::fabs(minus_turn_error)));
+}
+
 std::string describe_joint_limit(const JointLimit & limit)
 {
 	if (!is_wrapped_joint_limit(limit)) {
@@ -88,6 +98,7 @@ ArmControllerNode::ArmControllerNode(const rclcpp::NodeOptions & options)
 	load_parameters();
 	sbus_parser_ = SbusParser(sbus_config_);
 	setup_ros_interfaces();
+	setup_action_servers();
 
 	const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
 		std::chrono::duration<double>(1.0 / loop_hz_));
@@ -128,6 +139,8 @@ void ArmControllerNode::load_parameters()
 	sequence_step_timeout_sec_ = this->declare_parameter<double>("motion.sequence_step_timeout_sec", pose_timeout_sec_);
 	sequence_total_timeout_sec_ = this->declare_parameter<double>("motion.sequence_total_timeout_sec", 60.0);
 	warn_throttle_ms_ = this->declare_parameter<int>("diagnostics.warn_throttle_ms", 1000);
+	pose_arm_action_name_ = this->declare_parameter<std::string>("actions.pose_arm_name", "r2/motion/pose_arm");
+	handle_kfs_action_name_ = this->declare_parameter<std::string>("actions.handle_kfs_name", "r2/motion/place_kfs");
 
 	joint_limits_[0].min_position = this->declare_parameter<double>("joint_limits.joint1.min", -3.0);
 	joint_limits_[0].max_position = this->declare_parameter<double>("joint_limits.joint1.max", 3.0);
@@ -332,6 +345,208 @@ void ArmControllerNode::setup_ros_interfaces()
 		10);
 }
 
+void ArmControllerNode::setup_action_servers()
+{
+	pose_arm_action_server_ = rclcpp_action::create_server<PoseArmAction>(
+		this,
+		pose_arm_action_name_,
+		std::bind(&ArmControllerNode::handle_pose_arm_goal, this, std::placeholders::_1, std::placeholders::_2),
+		std::bind(&ArmControllerNode::handle_pose_arm_cancel, this, std::placeholders::_1),
+		std::bind(&ArmControllerNode::handle_pose_arm_accepted, this, std::placeholders::_1));
+
+	handle_kfs_action_server_ = rclcpp_action::create_server<HandleForestKfsAction>(
+		this,
+		handle_kfs_action_name_,
+		std::bind(&ArmControllerNode::handle_handle_kfs_goal, this, std::placeholders::_1, std::placeholders::_2),
+		std::bind(&ArmControllerNode::handle_handle_kfs_cancel, this, std::placeholders::_1),
+		std::bind(&ArmControllerNode::handle_handle_kfs_accepted, this, std::placeholders::_1));
+
+	RCLCPP_INFO(
+		this->get_logger(),
+		"Action servers ready: pose='%s', handle_kfs='%s'",
+		pose_arm_action_name_.c_str(),
+		handle_kfs_action_name_.c_str());
+}
+
+bool ArmControllerNode::has_active_action_goal() const
+{
+	return (active_pose_arm_goal_ != nullptr) || (active_handle_kfs_goal_ != nullptr);
+}
+
+void ArmControllerNode::cancel_current_execution(const std::string & reason)
+{
+	if (!pose_execution_state_.active) {
+		return;
+	}
+	mark_pose_execution_failed(reason);
+}
+
+rclcpp_action::GoalResponse ArmControllerNode::handle_pose_arm_goal(
+	const rclcpp_action::GoalUUID & uuid,
+	std::shared_ptr<const PoseArmAction::Goal> goal)
+{
+	(void)uuid;
+	if (goal == nullptr) {
+		return rclcpp_action::GoalResponse::REJECT;
+	}
+
+	if (has_active_action_goal() || pose_execution_state_.active) {
+		RCLCPP_WARN(this->get_logger(), "Reject PoseArm goal: another action is running.");
+		return rclcpp_action::GoalResponse::REJECT;
+	}
+
+	if (goal->pose > PoseArmAction::Goal::POSE_LEVEL3) {
+		RCLCPP_WARN(this->get_logger(), "Reject PoseArm goal: invalid pose=%u.", goal->pose);
+		return rclcpp_action::GoalResponse::REJECT;
+	}
+
+	return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse ArmControllerNode::handle_pose_arm_cancel(
+	const std::shared_ptr<PoseArmGoalHandle> goal_handle)
+{
+	if ((goal_handle != nullptr) && (active_pose_arm_goal_ == goal_handle)) {
+		cancel_current_execution("Pose action canceled by client.");
+	}
+	return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void ArmControllerNode::handle_pose_arm_accepted(const std::shared_ptr<PoseArmGoalHandle> goal_handle)
+{
+	if (goal_handle == nullptr) {
+		return;
+	}
+
+	PoseExecutionRequest request;
+	request.pose_id = goal_handle->get_goal()->pose;
+	const PoseExecutionResult accepted = execute_pose_request(request);
+
+	if (!accepted.success) {
+		auto result = std::make_shared<PoseArmAction::Result>();
+		result->success = false;
+		result->message = accepted.message;
+		goal_handle->abort(result);
+		return;
+	}
+
+	active_pose_arm_goal_ = goal_handle;
+}
+
+rclcpp_action::GoalResponse ArmControllerNode::handle_handle_kfs_goal(
+	const rclcpp_action::GoalUUID & uuid,
+	std::shared_ptr<const HandleForestKfsAction::Goal> goal)
+{
+	(void)uuid;
+	if (goal == nullptr) {
+		return rclcpp_action::GoalResponse::REJECT;
+	}
+
+	if (has_active_action_goal() || pose_execution_state_.active) {
+		RCLCPP_WARN(this->get_logger(), "Reject HandleForestKFS goal: another action is running.");
+		return rclcpp_action::GoalResponse::REJECT;
+	}
+
+	if ((goal->mode != HandleForestKfsAction::Goal::MODE_PICK) &&
+		(goal->mode != HandleForestKfsAction::Goal::MODE_PLACE)) {
+		RCLCPP_WARN(this->get_logger(), "Reject HandleForestKFS goal: invalid mode=%u.", goal->mode);
+		return rclcpp_action::GoalResponse::REJECT;
+	}
+
+	if ((goal->target_stair_level != HandleForestKfsAction::Goal::TARGET_STAIR_LEVEL_DOWN) &&
+		(goal->target_stair_level != HandleForestKfsAction::Goal::TARGET_STAIR_LEVEL_UP)) {
+		RCLCPP_WARN(
+			this->get_logger(),
+			"Reject HandleForestKFS goal: invalid target_stair_level=%u.",
+			goal->target_stair_level);
+		return rclcpp_action::GoalResponse::REJECT;
+	}
+
+	return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse ArmControllerNode::handle_handle_kfs_cancel(
+	const std::shared_ptr<HandleForestKfsGoalHandle> goal_handle)
+{
+	if ((goal_handle != nullptr) && (active_handle_kfs_goal_ == goal_handle)) {
+		cancel_current_execution("HandleForestKFS action canceled by client.");
+	}
+	return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void ArmControllerNode::handle_handle_kfs_accepted(const std::shared_ptr<HandleForestKfsGoalHandle> goal_handle)
+{
+	if (goal_handle == nullptr) {
+		return;
+	}
+
+	HandleKfsExecutionRequest request;
+	request.mode = goal_handle->get_goal()->mode;
+	request.target_stair_level = goal_handle->get_goal()->target_stair_level;
+	const PoseExecutionResult accepted = execute_handle_kfs_request(request);
+
+	if (!accepted.success) {
+		auto result = std::make_shared<HandleForestKfsAction::Result>();
+		result->success = false;
+		result->message = accepted.message;
+		goal_handle->abort(result);
+		return;
+	}
+
+	active_handle_kfs_goal_ = goal_handle;
+}
+
+void ArmControllerNode::update_action_servers()
+{
+	if (active_pose_arm_goal_ != nullptr) {
+		auto feedback = std::make_shared<PoseArmAction::Feedback>();
+		const PoseExecutionFeedback pose_feedback = current_pose_feedback();
+		feedback->stage = pose_feedback.stage;
+		feedback->progress = pose_feedback.progress;
+		active_pose_arm_goal_->publish_feedback(feedback);
+
+		if (!pose_execution_state_.active) {
+			auto result = std::make_shared<PoseArmAction::Result>();
+			result->success = last_pose_result_.success;
+			result->message = last_pose_result_.message;
+
+			if (active_pose_arm_goal_->is_canceling()) {
+				active_pose_arm_goal_->canceled(result);
+			} else if (last_pose_result_.success) {
+				active_pose_arm_goal_->succeed(result);
+			} else {
+				active_pose_arm_goal_->abort(result);
+			}
+
+			active_pose_arm_goal_.reset();
+		}
+	}
+
+	if (active_handle_kfs_goal_ != nullptr) {
+		auto feedback = std::make_shared<HandleForestKfsAction::Feedback>();
+		const PoseExecutionFeedback pose_feedback = current_pose_feedback();
+		feedback->stage = pose_feedback.stage;
+		feedback->progress = pose_feedback.progress;
+		active_handle_kfs_goal_->publish_feedback(feedback);
+
+		if (!pose_execution_state_.active) {
+			auto result = std::make_shared<HandleForestKfsAction::Result>();
+			result->success = last_pose_result_.success;
+			result->message = last_pose_result_.message;
+
+			if (active_handle_kfs_goal_->is_canceling()) {
+				active_handle_kfs_goal_->canceled(result);
+			} else if (last_pose_result_.success) {
+				active_handle_kfs_goal_->succeed(result);
+			} else {
+				active_handle_kfs_goal_->abort(result);
+			}
+
+			active_handle_kfs_goal_.reset();
+		}
+	}
+}
+
 void ArmControllerNode::sbus_callback(const custom_msgs::msg::ReadSBUSRC::SharedPtr msg)
 {
 	latest_sbus_ = *msg;
@@ -404,6 +619,7 @@ void ArmControllerNode::control_timer_callback()
 		if (pose_execution_state_.active) {
 			mark_pose_execution_failed("Pose execution interrupted by ESTOP.");
 		}
+		update_action_servers();
 		send_disable_command_once();
 		return;
 	}
@@ -422,6 +638,7 @@ void ArmControllerNode::control_timer_callback()
 	}
 
 	update_pose_execution_status();
+	update_action_servers();
 }
 
 void ArmControllerNode::apply_transition(const StateTransition & transition)
@@ -1112,16 +1329,28 @@ float ArmControllerNode::max_active_joint_error(const PoseTarget & target) const
 	float max_error = 0.0F;
 
 	if (joint_enabled_[0]) {
-		max_error = std::max(max_error, std::fabs(target.joint1 - motor_controller_.joint1_feedback().value().position));
+		const float joint1_error = is_wrapped_joint_limit(joint_limits_[0])
+			? angular_error_with_wrap(target.joint1, motor_controller_.joint1_feedback().value().position)
+			: std::fabs(target.joint1 - motor_controller_.joint1_feedback().value().position);
+		max_error = std::max(max_error, joint1_error);
 	}
 	if (joint_enabled_[1]) {
-		max_error = std::max(max_error, std::fabs(target.joint2 - motor_controller_.joint2_feedback().value().position));
+		const float joint2_error = is_wrapped_joint_limit(joint_limits_[1])
+			? angular_error_with_wrap(target.joint2, motor_controller_.joint2_feedback().value().position)
+			: std::fabs(target.joint2 - motor_controller_.joint2_feedback().value().position);
+		max_error = std::max(max_error, joint2_error);
 	}
 	if (joint_enabled_[2]) {
-		max_error = std::max(max_error, std::fabs(target.joint3 - motor_controller_.joint3_feedback().value().position));
+		const float joint3_error = is_wrapped_joint_limit(joint_limits_[2])
+			? angular_error_with_wrap(target.joint3, motor_controller_.joint3_feedback().value().position)
+			: std::fabs(target.joint3 - motor_controller_.joint3_feedback().value().position);
+		max_error = std::max(max_error, joint3_error);
 	}
 	if (joint_enabled_[3]) {
-		max_error = std::max(max_error, std::fabs(target.joint4 - motor_controller_.joint4_feedback().value().position));
+		const float joint4_error = is_wrapped_joint_limit(joint_limits_[3])
+			? angular_error_with_wrap(target.joint4, motor_controller_.joint4_feedback().value().position)
+			: std::fabs(target.joint4 - motor_controller_.joint4_feedback().value().position);
+		max_error = std::max(max_error, joint4_error);
 	}
 
 	return max_error;

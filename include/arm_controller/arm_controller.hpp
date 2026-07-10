@@ -13,7 +13,10 @@
 #include "custom_msgs/msg/read_dm_motor.hpp"
 #include "custom_msgs/msg/read_sbusrc.hpp"
 #include "custom_msgs/msg/write_dm_motor_position_control_with_speed_limit.hpp"
+#include "rc_interfaces/action/handle_forest_kfs.hpp"
+#include "rc_interfaces/action/pose_arm.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 
 #include "arm_controller/motor_controller.hpp"
 #include "arm_controller/sbus_parser.hpp"
@@ -98,6 +101,11 @@ struct PoseExecutionState
 class ArmControllerNode : public rclcpp::Node
 {
 public:
+  using PoseArmAction = rc_interfaces::action::PoseArm;
+  using HandleForestKfsAction = rc_interfaces::action::HandleForestKFS;
+  using PoseArmGoalHandle = rclcpp_action::ServerGoalHandle<PoseArmAction>;
+  using HandleForestKfsGoalHandle = rclcpp_action::ServerGoalHandle<HandleForestKfsAction>;
+
   explicit ArmControllerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
   // PoseArm.action adapter can call this method directly (non-blocking).
@@ -111,6 +119,24 @@ private:
 
   void load_parameters();
   void setup_ros_interfaces();
+  void setup_action_servers();
+  void update_action_servers();
+  [[nodiscard]] bool has_active_action_goal() const;
+  void cancel_current_execution(const std::string & reason);
+
+  rclcpp_action::GoalResponse handle_pose_arm_goal(
+    const rclcpp_action::GoalUUID & uuid,
+    std::shared_ptr<const PoseArmAction::Goal> goal);
+  rclcpp_action::CancelResponse handle_pose_arm_cancel(
+    const std::shared_ptr<PoseArmGoalHandle> goal_handle);
+  void handle_pose_arm_accepted(const std::shared_ptr<PoseArmGoalHandle> goal_handle);
+
+  rclcpp_action::GoalResponse handle_handle_kfs_goal(
+    const rclcpp_action::GoalUUID & uuid,
+    std::shared_ptr<const HandleForestKfsAction::Goal> goal);
+  rclcpp_action::CancelResponse handle_handle_kfs_cancel(
+    const std::shared_ptr<HandleForestKfsGoalHandle> goal_handle);
+  void handle_handle_kfs_accepted(const std::shared_ptr<HandleForestKfsGoalHandle> goal_handle);
 
   void sbus_callback(const custom_msgs::msg::ReadSBUSRC::SharedPtr msg);
   void joint1_callback(const custom_msgs::msg::ReadDmMotor::SharedPtr msg);
@@ -180,6 +206,8 @@ private:
   double sequence_step_timeout_sec_{8.0};
   double sequence_total_timeout_sec_{60.0};
   int warn_throttle_ms_{1000};
+  std::string pose_arm_action_name_{"r2/motion/pose_arm"};
+  std::string handle_kfs_action_name_{"r2/motion/place_kfs"};
 
   PoseTarget manual_pose_{};
   PoseTarget show_low_pose_{};
@@ -219,6 +247,10 @@ private:
   rclcpp::Publisher<custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit>::SharedPtr joint2_pub_;
   rclcpp::Publisher<custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit>::SharedPtr joint3_pub_;
   rclcpp::Publisher<custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit>::SharedPtr joint4_pub_;
+  rclcpp_action::Server<PoseArmAction>::SharedPtr pose_arm_action_server_;
+  rclcpp_action::Server<HandleForestKfsAction>::SharedPtr handle_kfs_action_server_;
+  std::shared_ptr<PoseArmGoalHandle> active_pose_arm_goal_;
+  std::shared_ptr<HandleForestKfsGoalHandle> active_handle_kfs_goal_;
 
   rclcpp::TimerBase::SharedPtr control_timer_;
   bool disable_command_sent_{false};
