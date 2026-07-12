@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <functional>
 #include <future>
 #include <limits>
@@ -1486,7 +1487,34 @@ bool ArmControllerNode::process_step_suction_action(
 		return false;
 	}
 
-	auto response = pending_suction_future_.get();
+	suction_control::srv::SetSuction::Response::SharedPtr response;
+	try {
+		response = pending_suction_future_.get();
+	} catch (const std::exception & ex) {
+		*error_message =
+			"Suction service call threw exception at step " +
+			std::to_string(pose_execution_state_.active_step_index) + ": " + ex.what();
+		clear_pending_suction_call();
+		if (!suction_fail_on_error_) {
+			RCLCPP_WARN(this->get_logger(), "%s", error_message->c_str());
+			error_message->clear();
+			pose_execution_state_.step_suction_done = true;
+			return true;
+		}
+		return false;
+	} catch (...) {
+		*error_message =
+			"Suction service call threw unknown exception at step " +
+			std::to_string(pose_execution_state_.active_step_index) + ".";
+		clear_pending_suction_call();
+		if (!suction_fail_on_error_) {
+			RCLCPP_WARN(this->get_logger(), "%s", error_message->c_str());
+			error_message->clear();
+			pose_execution_state_.step_suction_done = true;
+			return true;
+		}
+		return false;
+	}
 	const bool requested_suck = pending_suction_target_;
 	clear_pending_suction_call();
 	if (response == nullptr) {

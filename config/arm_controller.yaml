@@ -70,7 +70,7 @@ arm_controller:
             suction_when: after_reach
 
       pick_up:
-        step_count: 3
+        step_count: 4
         steps:
           0:
             pose: pose_init
@@ -157,6 +157,7 @@ arm_controller:
         - pose_weight_forward
         - pose_level2
         - pose_level3
+        - pose1
 
       manual:
         joint1: 1.8369219303131104
