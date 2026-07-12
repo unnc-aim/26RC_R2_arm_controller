@@ -112,22 +112,18 @@ std::string to_lower_ascii_copy(const std::string & input)
 	return output;
 }
 
-std::optional<SequenceSuctionAction> parse_sequence_suction_action(const std::string & raw)
+std::optional<SequenceSuctionAction> parse_sequence_suction_action(int raw)
 {
-	const std::string value = to_lower_ascii_copy(raw);
-	if ((value == "") || (value == "none")) {
+	switch (raw) {
+		case 0:
 		return SequenceSuctionAction::NONE;
-	}
-
-	if (value == "on") {
+		case 1:
 		return SequenceSuctionAction::ON;
-	}
-
-	if (value == "off") {
+		case 2:
 		return SequenceSuctionAction::OFF;
+		default:
+			return std::nullopt;
 	}
-
-	return std::nullopt;
 }
 
 std::optional<SequenceSuctionWhen> parse_sequence_suction_when(const std::string & raw)
@@ -1347,16 +1343,16 @@ bool ArmControllerNode::load_sequence_steps_from_parameters(
 		step.target.joint4 = this->declare_parameter<double>(step_prefix + ".joint4", step.target.joint4);
 		step.dwell_sec = this->declare_parameter<double>(step_prefix + ".dwell_sec", 0.0);
 
-		const std::string suction_action_raw =
-			this->declare_parameter<std::string>(step_prefix + ".suction_action", "none");
+		const int suction_action_raw =
+			this->declare_parameter<int>(step_prefix + ".suction_action", 0);
 		const auto suction_action = parse_sequence_suction_action(suction_action_raw);
 		if (!suction_action.has_value()) {
 			RCLCPP_ERROR(
 				this->get_logger(),
-				"Invalid suction_action for %s at step %d: '%s'. Expected one of [none,on,off].",
+				"Invalid suction_action for %s at step %d: %d. Expected one of [0,1,2].",
 				base_param.c_str(),
 				i,
-				suction_action_raw.c_str());
+				suction_action_raw);
 			return false;
 		}
 		step.suction_action = suction_action.value();
@@ -1449,7 +1445,7 @@ bool ArmControllerNode::process_step_suction_action(
 
 		auto request = std::make_shared<suction_control::srv::SetSuction::Request>();
 		request->suck = (current_step.suction_action == SequenceSuctionAction::ON);
-		pending_suction_future_ = suction_client_->async_send_request(request);
+		pending_suction_future_ = suction_client_->async_send_request(request).future.share();
 		has_pending_suction_future_ = true;
 		pending_suction_started_at_ = this->now();
 		pending_suction_step_index_ = pose_execution_state_.active_step_index;

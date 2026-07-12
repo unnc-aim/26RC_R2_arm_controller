@@ -56,17 +56,17 @@ arm_controller:
           0:
             pose: pose_init
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 0
             suction_when: after_reach
           1:
             pose: pose_read_kfs_below
             dwell_sec: 0.5
-            suction_action: on
+            suction_action: 1
             suction_when: after_dwell
           2:
             pose: pose_init
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 0
             suction_when: after_reach
 
       pick_up:
@@ -75,22 +75,22 @@ arm_controller:
           0:
             pose: pose_init
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 0
             suction_when: after_reach
           1:
             pose: pose_read_kfs_above
             dwell_sec: 0.5
-            suction_action: on
-            suction_when: after_dwell
+            suction_action: 1
+            suction_when: after_reach
           2:
             pose: pose_init
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 0
             suction_when: after_reach
           3:
             pose: pose1
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 2
             suction_when: after_reach
 
       place_down:
@@ -99,17 +99,17 @@ arm_controller:
           0:
             pose: pose_init
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 0
             suction_when: after_reach
           1:
             pose: pose_read_kfs_below
             dwell_sec: 0.5
-            suction_action: off
+            suction_action: 2
             suction_when: after_dwell
           2:
             pose: pose_init
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 0
             suction_when: after_reach
 
       place_up:
@@ -118,17 +118,17 @@ arm_controller:
           0:
             pose: pose_init
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 0
             suction_when: after_reach
           1:
             pose: pose_read_kfs_above
             dwell_sec: 0.5
-            suction_action: off
+            suction_action: 2
             suction_when: after_dwell
           2:
             pose: pose_init
             dwell_sec: 0.0
-            suction_action: none
+            suction_action: 0
             suction_when: after_reach
 
     diagnostics:        
@@ -179,7 +179,7 @@ arm_controller:
         joint1: 2.0980865955352783
         joint2: -0.009156227111816406
         joint3: 1.7674124240875244
-        joint4: -1.4798825979232788
+        joint4: 1.652266263961792
       pose_read_kfs_below:
         joint1: 1.8369219303131104
         joint2: -0.19687986373901367
@@ -189,7 +189,7 @@ arm_controller:
         joint1: 2.160980463027954
         joint2: 0.8751018047332764
         joint3: 0.22324538230895996
-        joint4: -1.5453654527664185
+        joint4: 1.652266263961792
       pose_read_aruco_forward:
         joint1: 1.8369219303131104
         joint2: -0.19687986373901367
@@ -219,4 +219,4 @@ arm_controller:
         joint1: -1.9743114709854126
         joint2: 0.9053022861480713
         joint3: -0.1062777042388916
-        joint4: -1.5652116537094116
+        joint4: 1.652266263961792
