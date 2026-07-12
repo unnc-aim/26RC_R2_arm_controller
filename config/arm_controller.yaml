@@ -131,6 +131,30 @@ arm_controller:
             suction_action: 0
             suction_when: after_reach
 
+      pick_40_up:
+        step_count: 4
+        steps:
+          0:
+            pose: pose_init
+            dwell_sec: 0.0
+            suction_action: 0
+            suction_when: after_reach
+          1:
+            pose: pose_read_kfs_above
+            dwell_sec: 0.5
+            suction_action: 1
+            suction_when: after_reach
+          2:
+            pose: pose_init
+            dwell_sec: 0.0
+            suction_action: 0
+            suction_when: after_reach
+          3:
+            pose: pose1
+            dwell_sec: 0.0
+            suction_action: 2
+            suction_when: after_reach
+
     diagnostics:        
       warn_throttle_ms: 1000
 
@@ -176,20 +200,20 @@ arm_controller:
         joint4: -1.5453654527664185
 
       pose_init:
-        joint1: 2.0980865955352783
-        joint2: -0.009156227111816406
-        joint3: 1.7674124240875244
-        joint4: 1.652266263961792
+        joint1: 3.1371
+        joint2: 0.0987
+        joint3: 1.0945
+        joint4: -1.6827
       pose_read_kfs_below:
-        joint1: 1.8369219303131104
-        joint2: -0.19687986373901367
-        joint3: 0.0
-        joint4: 0.0
+        joint1: -2.89155
+        joint2: 0.8833467
+        joint3: 1.500
+        joint4:  -1.6810289
       pose_read_kfs_above:
-        joint1: 2.160980463027954
-        joint2: 0.8751018047332764
-        joint3: 0.22324538230895996
-        joint4: 1.652266263961792
+        joint1: 2.704113
+        joint2: 0.6163
+        joint3: 1.57777
+        joint4: -1.68093
       pose_read_aruco_forward:
         joint1: 1.8369219303131104
         joint2: -0.19687986373901367

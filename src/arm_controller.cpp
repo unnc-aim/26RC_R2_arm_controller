@@ -29,6 +29,7 @@ constexpr uint8_t kHandleKfsModePick = 0U;
 constexpr uint8_t kHandleKfsModePlace = 1U;
 constexpr uint8_t kHandleKfsLevelDown = 0U;
 constexpr uint8_t kHandleKfsLevelUp = 1U;
+constexpr uint8_t kHandleKfsLevel40Up = 2U;
 constexpr float kPi = 3.14159265358979323846F;
 constexpr float kTwoPi = 6.28318530717958647692F;
 
@@ -547,7 +548,8 @@ rclcpp_action::GoalResponse ArmControllerNode::handle_handle_kfs_goal(
 	}
 
 	if ((goal->target_stair_level != HandleForestKfsAction::Goal::TARGET_STAIR_LEVEL_DOWN) &&
-		(goal->target_stair_level != HandleForestKfsAction::Goal::TARGET_STAIR_LEVEL_UP)) {
+		(goal->target_stair_level != HandleForestKfsAction::Goal::TARGET_STAIR_LEVEL_UP) &&
+		(goal->target_stair_level != HandleForestKfsAction::Goal::TARGET_STAIR_LEVEL_40_UP)) {
 		RCLCPP_WARN(
 			this->get_logger(),
 			"Reject HandleForestKFS goal: invalid target_stair_level=%u.",
@@ -869,6 +871,14 @@ void ArmControllerNode::initialize_handle_kfs_sequences()
 			{PoseActionId::POSE_INIT, PoseActionId::POSE_READ_KFS_ABOVE, PoseActionId::POSE_INIT},
 			&place_up_steps)) {
 		handle_kfs_sequences_["place_up"] = place_up_steps;
+	}
+
+	std::vector<PoseSequenceStep> pick_40_up_steps;
+	if (load_sequence_steps_from_parameters(
+			"handle_kfs.pick_40_up",
+			{PoseActionId::POSE_INIT, PoseActionId::POSE_READ_KFS_ABOVE, PoseActionId::POSE_INIT},
+			&pick_40_up_steps)) {
+		handle_kfs_sequences_["pick_40_up"] = pick_40_up_steps;
 	}
 }
 
@@ -1271,6 +1281,14 @@ std::optional<std::string> ArmControllerNode::resolve_handle_kfs_sequence_key(
 	}
 
 	if ((mode == kHandleKfsModePlace) && (target_stair_level == kHandleKfsLevelUp)) {
+		return std::string("place_up");
+	}
+
+	if ((mode == kHandleKfsModePick) && (target_stair_level == kHandleKfsLevel40Up)) {
+		return std::string("pick_40_up");
+	}
+
+	if ((mode == kHandleKfsModePlace) && (target_stair_level == kHandleKfsLevel40Up)) {
 		return std::string("place_up");
 	}
 
