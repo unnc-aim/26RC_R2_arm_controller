@@ -13,6 +13,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(custom_msgs REQUIRED)
 find_package(rc_interfaces REQUIRED)
+find_package(suction_control REQUIRED)
 
 add_executable(arm_controller_node
   src/main.cpp
@@ -31,6 +32,7 @@ ament_target_dependencies(arm_controller_node
   rclcpp_action
   custom_msgs
   rc_interfaces
+  suction_control
 )
 
 install(TARGETS arm_controller_node

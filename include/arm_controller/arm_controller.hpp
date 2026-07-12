@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstddef>
+#include <future>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -17,6 +18,7 @@
 #include "rc_interfaces/action/pose_arm.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
+#include "suction_control/srv/set_suction.hpp"
 
 #include "arm_controller/motor_controller.hpp"
 #include "arm_controller/sbus_parser.hpp"
@@ -60,10 +62,25 @@ struct HandleKfsExecutionRequest
   uint8_t target_stair_level{0U};
 };
 
+enum class SequenceSuctionAction : uint8_t
+{
+  NONE = 0,
+  ON = 1,
+  OFF = 2,
+};
+
+enum class SequenceSuctionWhen : uint8_t
+{
+  AFTER_REACH = 0,
+  AFTER_DWELL = 1,
+};
+
 struct PoseSequenceStep
 {
   PoseTarget target{};
   double dwell_sec{0.0};
+  SequenceSuctionAction suction_action{SequenceSuctionAction::NONE};
+  SequenceSuctionWhen suction_when{SequenceSuctionWhen::AFTER_REACH};
 };
 
 enum class ExecutionKind : uint8_t
@@ -95,6 +112,7 @@ struct PoseExecutionState
   std::optional<rclcpp::Time> started_at{};
   std::optional<rclcpp::Time> step_started_at{};
   std::optional<rclcpp::Time> dwell_started_at{};
+  bool step_suction_done{false};
   PoseExecutionFeedback feedback{};
 };
 
@@ -162,6 +180,11 @@ private:
     const std::string & base_param,
     const std::vector<PoseActionId> & fallback_pose_ids,
     std::vector<PoseSequenceStep> * sequence_steps);
+  [[nodiscard]] bool process_step_suction_action(
+    const PoseSequenceStep & current_step,
+    SequenceSuctionWhen trigger_when,
+    std::string * error_message);
+  void clear_pending_suction_call();
   [[nodiscard]] bool motion_feedback_ready() const;
   [[nodiscard]] bool motion_target_reached() const;
   [[nodiscard]] float max_active_joint_error(const PoseTarget & target) const;
@@ -210,6 +233,10 @@ private:
   int warn_throttle_ms_{1000};
   std::string pose_arm_action_name_{"r2/motion/pose_arm"};
   std::string handle_kfs_action_name_{"r2/motion/place_kfs"};
+  bool suction_enabled_{true};
+  std::string suction_service_name_{"/set_suction"};
+  double suction_call_timeout_sec_{1.0};
+  bool suction_fail_on_error_{true};
 
   PoseTarget manual_pose_{};
   PoseTarget show_low_pose_{};
@@ -250,10 +277,17 @@ private:
   rclcpp::Publisher<custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit>::SharedPtr joint2_pub_;
   rclcpp::Publisher<custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit>::SharedPtr joint3_pub_;
   rclcpp::Publisher<custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit>::SharedPtr joint4_pub_;
+  rclcpp::Client<suction_control::srv::SetSuction>::SharedPtr suction_client_;
   rclcpp_action::Server<PoseArmAction>::SharedPtr pose_arm_action_server_;
   rclcpp_action::Server<HandleForestKfsAction>::SharedPtr handle_kfs_action_server_;
   std::shared_ptr<PoseArmGoalHandle> active_pose_arm_goal_;
   std::shared_ptr<HandleForestKfsGoalHandle> active_handle_kfs_goal_;
+
+  bool has_pending_suction_future_{false};
+  std::shared_future<suction_control::srv::SetSuction::Response::SharedPtr> pending_suction_future_;
+  std::optional<rclcpp::Time> pending_suction_started_at_;
+  size_t pending_suction_step_index_{0U};
+  bool pending_suction_target_{false};
 
   rclcpp::TimerBase::SharedPtr control_timer_;
   bool disable_command_sent_{false};

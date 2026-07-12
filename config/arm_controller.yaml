@@ -56,12 +56,18 @@ arm_controller:
           0:
             pose: pose_init
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
           1:
             pose: pose_read_kfs_below
             dwell_sec: 0.5
+            suction_action: on
+            suction_when: after_dwell
           2:
             pose: pose_init
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
 
       pick_up:
         step_count: 3
@@ -69,15 +75,23 @@ arm_controller:
           0:
             pose: pose_init
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
           1:
             pose: pose_read_kfs_above
             dwell_sec: 0.5
+            suction_action: on
+            suction_when: after_dwell
           2:
             pose: pose_init
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
           3:
             pose: pose1
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
 
       place_down:
         step_count: 3
@@ -85,12 +99,18 @@ arm_controller:
           0:
             pose: pose_init
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
           1:
             pose: pose_read_kfs_below
             dwell_sec: 0.5
+            suction_action: off
+            suction_when: after_dwell
           2:
             pose: pose_init
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
 
       place_up:
         step_count: 3
@@ -98,12 +118,18 @@ arm_controller:
           0:
             pose: pose_init
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
           1:
             pose: pose_read_kfs_above
             dwell_sec: 0.5
+            suction_action: off
+            suction_when: after_dwell
           2:
             pose: pose_init
             dwell_sec: 0.0
+            suction_action: none
+            suction_when: after_reach
 
     diagnostics:        
       warn_throttle_ms: 1000
@@ -111,6 +137,12 @@ arm_controller:
     actions:
       pose_arm_name: "r2/motion/pose_arm"
       handle_kfs_name: "r2/motion/place_kfs"
+
+    suction:
+      enabled: true
+      service_name: "/set_suction"
+      call_timeout_sec: 1.0
+      fail_on_error: true
 
     poses:
       names:

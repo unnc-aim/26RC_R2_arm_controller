@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -98,6 +100,75 @@ uint8_t stage_for_sequence_dwell(const std::string & sequence_name)
 	return kStageInit;
 }
 
+std::string to_lower_ascii_copy(const std::string & input)
+{
+	std::string output = input;
+	std::transform(
+		output.begin(),
+		output.end(),
+		output.begin(),
+		[](unsigned char c) {return static_cast<char>(std::tolower(c));});
+	return output;
+}
+
+std::optional<SequenceSuctionAction> parse_sequence_suction_action(const std::string & raw)
+{
+	const std::string value = to_lower_ascii_copy(raw);
+	if ((value == "") || (value == "none")) {
+		return SequenceSuctionAction::NONE;
+	}
+
+	if (value == "on") {
+		return SequenceSuctionAction::ON;
+	}
+
+	if (value == "off") {
+		return SequenceSuctionAction::OFF;
+	}
+
+	return std::nullopt;
+}
+
+std::optional<SequenceSuctionWhen> parse_sequence_suction_when(const std::string & raw)
+{
+	const std::string value = to_lower_ascii_copy(raw);
+	if ((value == "") || (value == "after_reach")) {
+		return SequenceSuctionWhen::AFTER_REACH;
+	}
+
+	if (value == "after_dwell") {
+		return SequenceSuctionWhen::AFTER_DWELL;
+	}
+
+	return std::nullopt;
+}
+
+const char * suction_action_to_string(SequenceSuctionAction action)
+{
+	switch (action) {
+		case SequenceSuctionAction::NONE:
+			return "none";
+		case SequenceSuctionAction::ON:
+			return "on";
+		case SequenceSuctionAction::OFF:
+			return "off";
+		default:
+			return "unknown";
+	}
+}
+
+const char * suction_when_to_string(SequenceSuctionWhen when)
+{
+	switch (when) {
+		case SequenceSuctionWhen::AFTER_REACH:
+			return "after_reach";
+		case SequenceSuctionWhen::AFTER_DWELL:
+			return "after_dwell";
+		default:
+			return "unknown";
+	}
+}
+
 }  // namespace
 
 ArmControllerNode::ArmControllerNode(const rclcpp::NodeOptions & options)
@@ -150,6 +221,10 @@ void ArmControllerNode::load_parameters()
 	warn_throttle_ms_ = this->declare_parameter<int>("diagnostics.warn_throttle_ms", 1000);
 	pose_arm_action_name_ = this->declare_parameter<std::string>("actions.pose_arm_name", "r2/motion/pose_arm");
 	handle_kfs_action_name_ = this->declare_parameter<std::string>("actions.handle_kfs_name", "r2/motion/place_kfs");
+	suction_enabled_ = this->declare_parameter<bool>("suction.enabled", true);
+	suction_service_name_ = this->declare_parameter<std::string>("suction.service_name", "/set_suction");
+	suction_call_timeout_sec_ = this->declare_parameter<double>("suction.call_timeout_sec", 1.0);
+	suction_fail_on_error_ = this->declare_parameter<bool>("suction.fail_on_error", true);
 
 	joint_limits_[0].min_position = this->declare_parameter<double>("joint_limits.joint1.min", -3.0);
 	joint_limits_[0].max_position = this->declare_parameter<double>("joint_limits.joint1.max", 3.0);
@@ -300,6 +375,14 @@ void ArmControllerNode::load_parameters()
 		throw std::invalid_argument("motion.sequence_total_timeout_sec must be > 0");
 	}
 
+	if (suction_call_timeout_sec_ <= 0.0) {
+		RCLCPP_ERROR(
+			this->get_logger(),
+			"Invalid parameter suction.call_timeout_sec=%.3f, must be > 0.",
+			suction_call_timeout_sec_);
+		throw std::invalid_argument("suction.call_timeout_sec must be > 0");
+	}
+
 	for (size_t i = 0; i < joint_limits_.size(); ++i) {
 		if (joint_limits_[i].min_position == joint_limits_[i].max_position) {
 			RCLCPP_ERROR(
@@ -352,6 +435,10 @@ void ArmControllerNode::setup_ros_interfaces()
 	joint4_pub_ = this->create_publisher<custom_msgs::msg::WriteDmMotorPositionControlWithSpeedLimit>(
 		joint4_topics_.write_topic,
 		10);
+
+	if (suction_enabled_) {
+		suction_client_ = this->create_client<suction_control::srv::SetSuction>(suction_service_name_);
+	}
 }
 
 void ArmControllerNode::setup_action_servers()
@@ -872,6 +959,8 @@ void ArmControllerNode::update_sequence_execution_status()
 		pose_execution_state_.started_at.reset();
 		pose_execution_state_.step_started_at.reset();
 		pose_execution_state_.dwell_started_at.reset();
+		pose_execution_state_.step_suction_done = false;
+		clear_pending_suction_call();
 		pose_execution_state_.feedback.stage = kStageReachingBack;
 		pose_execution_state_.feedback.progress = 1.0F;
 		motor_controller_.clear_active_target();
@@ -903,6 +992,13 @@ void ArmControllerNode::update_sequence_execution_status()
 	}
 
 	const auto & current_step = sequence_steps[pose_execution_state_.active_step_index];
+	std::string suction_error;
+	if (!process_step_suction_action(current_step, SequenceSuctionWhen::AFTER_REACH, &suction_error)) {
+		if (!suction_error.empty()) {
+			mark_pose_execution_failed(suction_error);
+		}
+		return;
+	}
 
 	if (current_step.dwell_sec > 0.0) {
 		if (!pose_execution_state_.dwell_started_at.has_value()) {
@@ -917,6 +1013,13 @@ void ArmControllerNode::update_sequence_execution_status()
 			pose_execution_state_.feedback.progress = 1.0F;
 			return;
 		}
+	}
+
+	if (!process_step_suction_action(current_step, SequenceSuctionWhen::AFTER_DWELL, &suction_error)) {
+		if (!suction_error.empty()) {
+			mark_pose_execution_failed(suction_error);
+		}
+		return;
 	}
 
 	const size_t next_step_index = pose_execution_state_.active_step_index + 1U;
@@ -939,6 +1042,7 @@ void ArmControllerNode::update_sequence_execution_status()
 	pose_execution_state_.active_step_index = next_step_index;
 	pose_execution_state_.step_started_at = this->now();
 	pose_execution_state_.dwell_started_at.reset();
+	pose_execution_state_.step_suction_done = false;
 	pose_execution_state_.feedback.stage = kStageInit;
 	pose_execution_state_.feedback.progress = 0.0F;
 }
@@ -955,6 +1059,8 @@ void ArmControllerNode::mark_pose_execution_failed(const std::string & message)
 	pose_execution_state_.started_at.reset();
 	pose_execution_state_.step_started_at.reset();
 	pose_execution_state_.dwell_started_at.reset();
+	pose_execution_state_.step_suction_done = false;
+	clear_pending_suction_call();
 	motor_controller_.clear_active_target();
 	last_pose_result_.success = false;
 	last_pose_result_.message = message;
@@ -1053,6 +1159,8 @@ PoseExecutionResult ArmControllerNode::execute_pose_by_id(uint8_t pose_id, const
 	pose_execution_state_.started_at = this->now();
 	pose_execution_state_.step_started_at = this->now();
 	pose_execution_state_.dwell_started_at.reset();
+	pose_execution_state_.step_suction_done = false;
+	clear_pending_suction_call();
 	pose_execution_state_.feedback.stage = kStageInit;
 	pose_execution_state_.feedback.progress = 0.0F;
 
@@ -1104,6 +1212,16 @@ PoseExecutionResult ArmControllerNode::execute_sequence(
 		}
 	}
 
+	if (suction_enabled_ && (suction_client_ != nullptr) && !suction_client_->service_is_ready()) {
+		if (!suction_client_->wait_for_service(200ms)) {
+			RCLCPP_WARN(
+				this->get_logger(),
+				"Suction service '%s' is not ready before starting sequence '%s'.",
+				suction_service_name_.c_str(),
+				sequence_name.c_str());
+		}
+	}
+
 	PoseTarget first_target;
 	std::string resolve_error;
 	if (!resolve_pose_target_safe(sequence_steps.front().target, &first_target, &resolve_error)) {
@@ -1123,6 +1241,8 @@ PoseExecutionResult ArmControllerNode::execute_sequence(
 	pose_execution_state_.started_at = this->now();
 	pose_execution_state_.step_started_at = this->now();
 	pose_execution_state_.dwell_started_at.reset();
+	pose_execution_state_.step_suction_done = false;
+	clear_pending_suction_call();
 	pose_execution_state_.feedback.stage = kStageInit;
 	pose_execution_state_.feedback.progress = 0.0F;
 
@@ -1226,6 +1346,34 @@ bool ArmControllerNode::load_sequence_steps_from_parameters(
 		step.target.joint4 = this->declare_parameter<double>(step_prefix + ".joint4", step.target.joint4);
 		step.dwell_sec = this->declare_parameter<double>(step_prefix + ".dwell_sec", 0.0);
 
+		const std::string suction_action_raw =
+			this->declare_parameter<std::string>(step_prefix + ".suction_action", "none");
+		const auto suction_action = parse_sequence_suction_action(suction_action_raw);
+		if (!suction_action.has_value()) {
+			RCLCPP_ERROR(
+				this->get_logger(),
+				"Invalid suction_action for %s at step %d: '%s'. Expected one of [none,on,off].",
+				base_param.c_str(),
+				i,
+				suction_action_raw.c_str());
+			return false;
+		}
+		step.suction_action = suction_action.value();
+
+		const std::string suction_when_raw =
+			this->declare_parameter<std::string>(step_prefix + ".suction_when", "after_reach");
+		const auto suction_when = parse_sequence_suction_when(suction_when_raw);
+		if (!suction_when.has_value()) {
+			RCLCPP_ERROR(
+				this->get_logger(),
+				"Invalid suction_when for %s at step %d: '%s'. Expected one of [after_reach,after_dwell].",
+				base_param.c_str(),
+				i,
+				suction_when_raw.c_str());
+			return false;
+		}
+		step.suction_when = suction_when.value();
+
 		if (step.dwell_sec < 0.0) {
 			RCLCPP_ERROR(
 				this->get_logger(),
@@ -1244,6 +1392,135 @@ bool ArmControllerNode::load_sequence_steps_from_parameters(
 		"Loaded sequence %s with %zu steps.",
 		base_param.c_str(),
 		sequence_steps->size());
+	return true;
+}
+
+void ArmControllerNode::clear_pending_suction_call()
+{
+	has_pending_suction_future_ = false;
+	pending_suction_started_at_.reset();
+	pending_suction_step_index_ = 0U;
+	pending_suction_target_ = false;
+}
+
+bool ArmControllerNode::process_step_suction_action(
+	const PoseSequenceStep & current_step,
+	SequenceSuctionWhen trigger_when,
+	std::string * error_message)
+{
+	if (error_message == nullptr) {
+		return false;
+	}
+
+	error_message->clear();
+
+	if (!suction_enabled_ || (current_step.suction_action == SequenceSuctionAction::NONE)) {
+		pose_execution_state_.step_suction_done = true;
+		clear_pending_suction_call();
+		return true;
+	}
+
+	if (current_step.suction_when != trigger_when) {
+		return true;
+	}
+
+	if (pose_execution_state_.step_suction_done) {
+		return true;
+	}
+
+	if (suction_client_ == nullptr) {
+		*error_message = "Suction service client is not initialized.";
+		return false;
+	}
+
+	if (!has_pending_suction_future_) {
+		if (!suction_client_->service_is_ready()) {
+			*error_message = "Suction service '" + suction_service_name_ + "' is not ready.";
+			if (suction_fail_on_error_) {
+				return false;
+			}
+
+			RCLCPP_WARN(this->get_logger(), "%s", error_message->c_str());
+			error_message->clear();
+			pose_execution_state_.step_suction_done = true;
+			return true;
+		}
+
+		auto request = std::make_shared<suction_control::srv::SetSuction::Request>();
+		request->suck = (current_step.suction_action == SequenceSuctionAction::ON);
+		pending_suction_future_ = suction_client_->async_send_request(request);
+		has_pending_suction_future_ = true;
+		pending_suction_started_at_ = this->now();
+		pending_suction_step_index_ = pose_execution_state_.active_step_index;
+		pending_suction_target_ = request->suck;
+		pose_execution_state_.feedback.stage = request->suck ? kStageTurningOnSuction : kStageTurningOffSuction;
+		pose_execution_state_.feedback.progress = 1.0F;
+		RCLCPP_INFO(
+			this->get_logger(),
+			"Requested suction action at sequence step %zu: action=%s, trigger=%s",
+			pose_execution_state_.active_step_index,
+			suction_action_to_string(current_step.suction_action),
+			suction_when_to_string(current_step.suction_when));
+		return false;
+	}
+
+	if (pending_suction_step_index_ != pose_execution_state_.active_step_index) {
+		*error_message = "Internal error: pending suction response step index mismatch.";
+		clear_pending_suction_call();
+		return false;
+	}
+
+	if (pending_suction_future_.wait_for(0ms) != std::future_status::ready) {
+		if (pending_suction_started_at_.has_value() &&
+			((this->now() - pending_suction_started_at_.value()).seconds() > suction_call_timeout_sec_)) {
+			*error_message =
+				"Suction service call timeout at step " + std::to_string(pose_execution_state_.active_step_index) + ".";
+			clear_pending_suction_call();
+			if (!suction_fail_on_error_) {
+				RCLCPP_WARN(this->get_logger(), "%s", error_message->c_str());
+				error_message->clear();
+				pose_execution_state_.step_suction_done = true;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	auto response = pending_suction_future_.get();
+	const bool requested_suck = pending_suction_target_;
+	clear_pending_suction_call();
+	if (response == nullptr) {
+		*error_message =
+			"Suction service returned null response at step " + std::to_string(pose_execution_state_.active_step_index) + ".";
+		if (!suction_fail_on_error_) {
+			RCLCPP_WARN(this->get_logger(), "%s", error_message->c_str());
+			error_message->clear();
+			pose_execution_state_.step_suction_done = true;
+			return true;
+		}
+		return false;
+	}
+
+	if (!response->success) {
+		*error_message =
+			"Suction service failed at step " + std::to_string(pose_execution_state_.active_step_index) +
+			": " + response->message;
+		if (!suction_fail_on_error_) {
+			RCLCPP_WARN(this->get_logger(), "%s", error_message->c_str());
+			error_message->clear();
+			pose_execution_state_.step_suction_done = true;
+			return true;
+		}
+		return false;
+	}
+
+	pose_execution_state_.step_suction_done = true;
+	RCLCPP_INFO(
+		this->get_logger(),
+		"Suction action completed at step %zu: target=%s, current=%s",
+		pose_execution_state_.active_step_index,
+		requested_suck ? "on" : "off",
+		response->current_suck ? "on" : "off");
 	return true;
 }
 
