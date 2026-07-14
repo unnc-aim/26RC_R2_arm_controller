@@ -211,6 +211,7 @@ void ArmControllerNode::load_parameters()
 	joint_enabled_[3] = this->declare_parameter<bool>("joint4.enabled", true);
 
 	loop_hz_ = this->declare_parameter<double>("motion.control_loop_hz", 1000.0);
+	sbus_offline_estop_delay_sec_ = this->declare_parameter<double>("sbus.offline_estop_delay_sec", 0.5);
 	motion_speed_ = this->declare_parameter<double>("motion.speed", 5.0);
 	position_tolerance_ = this->declare_parameter<double>("motion.position_tolerance", 5.0);
 	pose_timeout_sec_ = this->declare_parameter<double>("motion.pose_timeout_sec", 8.0);
@@ -695,11 +696,31 @@ void ArmControllerNode::control_timer_callback()
 		}
 
 		if (latest_sbus_.online == 0U) {
+			const rclcpp::Time now = this->now();
+			if (!sbus_offline_since_.has_value()) {
+				sbus_offline_since_ = now;
+			}
+
+			const auto offline_duration = now - sbus_offline_since_.value();
+			const auto offline_delay = rclcpp::Duration::from_nanoseconds(
+				static_cast<int64_t>(sbus_offline_estop_delay_sec_ * 1000.0 * 1000.0 * 1000.0));
+
+			if (offline_duration < offline_delay) {
+				RCLCPP_WARN_THROTTLE(
+					this->get_logger(),
+					*this->get_clock(),
+					warn_throttle_ms_,
+					"SBUS offline detected, waiting %.3f s before force disable.",
+					sbus_offline_estop_delay_sec_);
+				return;
+			}
+
 			RCLCPP_WARN_THROTTLE(
 				this->get_logger(),
 				*this->get_clock(),
 				warn_throttle_ms_,
-				"SBUS offline, force disable outputs.");
+				"SBUS offline persisted for %.3f s, force disable outputs.",
+				sbus_offline_estop_delay_sec_);
 			if (pose_execution_state_.active) {
 				mark_pose_execution_failed("Pose execution interrupted by SBUS offline.");
 			}
@@ -707,6 +728,8 @@ void ArmControllerNode::control_timer_callback()
 			send_disable_command_once();
 			return;
 		}
+
+		sbus_offline_since_.reset();
 
 		if (!parse_output.sbus_ok) {
 			RCLCPP_WARN_THROTTLE(

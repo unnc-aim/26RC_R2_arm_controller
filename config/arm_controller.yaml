@@ -29,19 +29,19 @@ arm_controller:
 
     motion:
       control_loop_hz: 1000.0
-      speed: 0.1
+      speed: 0.4
       position_tolerance: 0.01
       pose_timeout_sec: 30.0
-      sequence_step_timeout_sec: 30.0
-      sequence_total_timeout_sec: 200.0
+      sequence_step_timeout_sec: 60.0
+      sequence_total_timeout_sec: 300.0
 
     joint_limits:
       joint1:
         min: 1.83
-        max: -0.90
+        max: -0.03
       joint2:
-        min: -0.21
-        max: 0.91
+        min: -0.23
+        max: 0.93
       joint3:
         min: -1.04
         max: 2.6
@@ -51,21 +51,26 @@ arm_controller:
 
     handle_kfs:
       pick_down:
-        step_count: 3
+        step_count: 4
         steps:
           0:
-            pose: pose_init
+            pose: pose5
+            dwell_sec: 0.0
+            suction_action: 1
+            suction_when: after_reach
+          1:
+            pose: pose6
+            dwell_sec: 0.0
+            suction_action: 0
+            suction_when: after_dwell
+          2:
+            pose: pose7
             dwell_sec: 0.0
             suction_action: 0
             suction_when: after_reach
-          1:
-            pose: pose_read_kfs_below
+          3:
+            pose: pose4  
             dwell_sec: 0.5
-            suction_action: 1
-            suction_when: after_dwell
-          2:
-            pose: pose_init
-            dwell_sec: 0.0
             suction_action: 0
             suction_when: after_reach
 
@@ -73,24 +78,24 @@ arm_controller:
         step_count: 4
         steps:
           0:
-            pose: pose_init
+            pose: pose1
+            dwell_sec: 0.0
+            suction_action: 1
+            suction_when: after_reach
+          1:
+            pose: pose2
             dwell_sec: 0.0
             suction_action: 0
             suction_when: after_reach
-          1:
-            pose: pose_read_kfs_above
-            dwell_sec: 0.5
-            suction_action: 1
-            suction_when: after_reach
           2:
-            pose: pose_init
+            pose: pose3
             dwell_sec: 0.0
             suction_action: 0
             suction_when: after_reach
           3:
-            pose: pose1
+            pose: pose4
             dwell_sec: 0.0
-            suction_action: 2
+            suction_action: 0
             suction_when: after_reach
 
       place_down:
@@ -166,7 +171,7 @@ arm_controller:
       enabled: true
       service_name: "/set_suction"
       call_timeout_sec: 1.0
-      fail_on_error: true
+      fail_on_error: false
 
     poses:
       names:
@@ -182,6 +187,12 @@ arm_controller:
         - pose_level2
         - pose_level3
         - pose1
+        - pose2
+        - pose3
+        - pose4
+        - pose5
+        - pose6
+        - pose7
 
       manual:
         joint1: 1.8369219303131104
@@ -208,7 +219,7 @@ arm_controller:
         joint1: -2.89155
         joint2: 0.8833467
         joint3: 1.500
-        joint4:  -1.6810289
+        joint4: -1.6810289
       pose_read_kfs_above:
         joint1: 2.704113
         joint2: 0.6163
@@ -220,27 +231,57 @@ arm_controller:
         joint3: 0.0
         joint4: 0.0
       pose_climb_r1:
-        joint1: -1.9743114709854126
-        joint2: 0.9053022861480713
-        joint3: -0.1062777042388916
-        joint4: -1.5652116537094116
+        joint1: -2.22694277
+        joint2: 0.899645566
+        joint3: 2.492325
+        joint4: -1.5704847
       pose_weight_forward:
-        joint1: -1.9743114709854126
-        joint2: 0.9053022861480713
-        joint3: -0.1062777042388916
-        joint4: -1.5652116537094116
+        joint1: -2.202015161514282
+        joint2: 0.875101804
+        joint3: 2.51207566261
+        joint4: -1.57623732
       pose_level2:
-        joint1: -2.2454466819763184
-        joint2: 0.8751018047332764
-        joint3: 0.0
-        joint4: 0.0
+        joint1: -2.78886771
+        joint2: 0.87989544
+        joint3: 2.25282931
+        joint4: -1.562335371971
       pose_level3:
-        joint1: -2.2454466819763184
-        joint2: 0.8751018047332764
-        joint3: 0.0
-        joint4: 0.0
+        joint1: -3.02711772
+        joint2: 0.89159178733
+        joint3: 2.4925172328
+        joint4: -1.635200
       pose1:
-        joint1: -1.9743114709854126
-        joint2: 0.9053022861480713
-        joint3: -0.1062777042388916
-        joint4: 1.652266263961792
+        joint1: -3.027117729
+        joint2: 0.9276
+        joint3: 1.79387
+        joint4: -1.59569
+      pose2:
+        joint1: -1.9438230
+        joint2: 0.927736
+        joint3: 1.499249
+        joint4: -1.5956
+      pose3:
+        joint1: -2.2599
+        joint2: 0.925148
+        joint3: 1.24517
+        joint4: -1.58908
+      pose4:
+        joint1: -2.89365
+        joint2: 0.8968651
+        joint3: 2.486668
+        joint4: -1.589084
+      pose5:
+        joint1: -1.470582723
+        joint2: 0.9110548496246
+        joint3: 2.494338750
+        joint4: -1.5613766
+      pose6:
+        joint1: -1.6173677
+        joint2: 0.89954
+        joint3: 1.7873547
+        joint4: -1.5716352
+      pose7:
+        joint1: -1.644596338272
+        joint2: 0.77529549
+        joint3: 2.11543
+        joint4: -1.5708682537

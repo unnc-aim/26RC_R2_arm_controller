@@ -225,6 +225,7 @@ private:
   JointTopics joint4_topics_{};
 
   double loop_hz_{1000.0};
+  double sbus_offline_estop_delay_sec_{0.5};
   float motion_speed_{5.0F};
   float position_tolerance_{5.0F};
   double pose_timeout_sec_{8.0};
@@ -262,6 +263,7 @@ private:
 
   custom_msgs::msg::ReadSBUSRC latest_sbus_{};
   bool has_sbus_message_{false};
+  std::optional<rclcpp::Time> sbus_offline_since_;
 
   SbusParser sbus_parser_;
   StateMachine state_machine_;
